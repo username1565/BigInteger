@@ -1,5 +1,9 @@
 using System;
 using System.Security.Cryptography;
+using System.IO;		//FileStream. (methods CompareFiles, EncryptFile, DecryptFile)
+using System.Linq;		//Compare arrays SequenceEqual (method CompareBytes)
+using System.Xml;		//to parse XML-keys, when this loading. (method LoadKeyFile)
+using System.Xml.Linq;	//to parse XML-keys, when this loading. System.Xml.Linq.XElement (method LoadKeyFile)
 
 // compile with: /doc:BigIntegerDocComment.xml
 
@@ -17,7 +21,16 @@ public class BigInteger
 {
     // maximum length of the BigInteger in uint (4 bytes)
     // change this to suit the required level of precision.
-    private const int maxLength = 70;
+
+//    private const int maxLength = 70;
+//	private const int maxLength = 16384;		// * 4	=	65536	=	524288 bits
+	private const int maxLength = 2048;		// * 4	=	8192	=	16384 bits
+//
+//Test large BigInteger:
+//		Random rnd2 = new Random();
+//		Byte[] randbigint = new Byte[maxLength];	//with large values of "maxLength" BigInteger working slower...
+//		rnd.NextBytes(randbigint);
+//		Console.WriteLine("test_large_BigInteger "+(new BigInteger(randbigint)).ToString());
 
     // primes smaller than 2000 to test the generated prime number
     public static readonly int[] primesBelow2000 = {
@@ -1427,6 +1440,26 @@ public class BigInteger
     }
 
 
+	public BigInteger Pow(BigInteger n)
+	{
+		BigInteger x = this;
+		BigInteger result = new BigInteger(1);
+		while ( n > 0 )
+		{
+			if ( ( n & 1 ) == 0 )
+			{
+				x = x * x;
+				n = n >> 1;
+			}
+			else
+			{
+				result = result * x;
+				n = n - 1;
+			}
+		}
+		return result;
+	}
+
     /// <summary>
     /// Modulo Exponentiation
     /// </summary>
@@ -1619,6 +1652,29 @@ public class BigInteger
         }
 
         return g;
+    }
+	
+    /// <summary>
+    /// Returns lcm(this, bi) = ( (|this*bi|) / gcd(this, bi) )
+    /// </summary>
+    /// <param name="bi"></param>
+    /// <returns>Largest Common Multiplier of this and bi</returns>
+    public BigInteger lcm(BigInteger bi)
+    {
+        BigInteger x;
+        BigInteger y;
+
+        if ((data[maxLength - 1] & 0x80000000) != 0)    	// negative
+            x = -this;
+        else
+            x = this;
+
+        if ((bi.data[maxLength - 1] & 0x80000000) != 0)     // negative
+            y = -bi;
+        else
+            y = bi;
+
+        return ((x*y) / x.gcd(y));
     }
 
 
@@ -2460,6 +2516,253 @@ public class BigInteger
     }
 
 
+    public BigInteger prevprime(int confidence = 10)
+    {
+		BigInteger big = this;
+		big = ( big - ( (big % 2 == 0) ? 1 : 2 ) );
+		bool isprime = big.isProbablePrime(confidence);
+		
+		while(isprime==false){
+            big = (big - 2);
+            isprime = big.isProbablePrime(confidence);
+        }
+//		Console.WriteLine("return prevprime: "+big);
+        return big;
+    }
+
+
+    public BigInteger nextprime(int confidence = 10)
+    {
+		BigInteger big = this;
+		big = ( big + ( (big % 2 == 0) ? 1 : 2 ) );
+		bool isprime = big.isProbablePrime(confidence);
+		
+		while(isprime==false){
+            big = (big + 2);
+            isprime = big.isProbablePrime(confidence);
+        }
+		
+        return big;
+	}
+
+
+    public bool isSafePrime(int confidence = 10){				//is the prime, value of (p-1)/2, where p = this? (true/false)			
+		return (
+						this.isProbablePrime(confidence)
+					&&	(
+							(this-1) / 2
+						)
+						.isProbablePrime(confidence)
+				)
+		;
+	}
+
+
+	// Generate Safe Prime
+    public static BigInteger genSafePrime(
+		int bits
+	,	int confidence = 10
+	,	string mode = "previous"
+	,	BigInteger number = null
+	,	Random rand = null
+	)
+    {
+		if(object.ReferenceEquals(null, number)){number = new BigInteger();}
+		if(object.ReferenceEquals(null, rand)){rand = new Random();}
+		
+		//	Proof of the validity of the representation a Safe-Prime number, in form: p = 12*k - 1:
+		//
+		//	Let q = 12*x+r; where x - natural number, r = q%12 - remainder by modulo 12, and number with value from 0 up to 11 (0,1,2,3,4,5,6,7,8,9,10,11).
+		//	In this form can be represented each natural number.
+		//
+		//	Now, let us prove that the representation of Safe-Prime, in form q = 12*x+11:
+		//
+		//	1.	When r is even, r = 2*y; q = 12*x + r = 12*x + 2y; q = 2*(6x+y) - so q have divisor 2, and this is even number, not an odd prime number.
+		//		So, y = 0,1,2,3,4,5, r = 0,2,4,6,8,10 - excluded.
+		//	
+		//	2. Now, exclude an odd r:
+		//		When r = 1; q = 12*x + 1; (q-1)/2 = 12*x/2 = 6*x = 2*3x - have divisor 2, and this is even number, not an odd Sophie-Germen prime number.
+		//		When r = 3; q = 12*x + 3; q = 3*(4x+1) - have divisor 3, and this is not a prime, because this have no divisors besides 1 and itself.
+		//		When r = 5; q = 12*x + 5; (q-1)/2 = (12*x+4)/2 = 2*(6x+2)/2 = (6x+2) = 2*(3x+1) - have divisor 2, and this is even number, not an odd Sophie-Germen prime number.
+		//			Exception: x = 0; q = 12*0 + 5 = 5; (q-1)/2 = (5-1)/2 = 4/2 = 2, is even, but this is a Sophie-Germen prime-number, and this have divisor 1 and itself.
+		//		When r = 7; q = 12*x + 7; (q-1)/2 = (12*x+6)/2 = 2*(6x+3)/2 = (6x+3) = 3*(2x+1) - have divisor 3, and this is not a prime, because this have no divisors besides 1 and itself.
+		//			Exception: x = 0; q = 12*0 + 7 = 7; (q-1)/2 = (7-1)/2 = 6/2 = 3, have divisor 3, but this is a Sophie-Germen prime-number, and this have divisor 1 and itself.
+		//		When r = 9; q = 12*x + 9; (q-1)/2 = (12*x+8)/2 = 2*(6*x+4)/2 = (6x+4) = 2*(3x+2) - have divisor 2, and this is even number, not an odd Sophie-Germen prime number.
+		//
+		//	After this all, from all possible values of r = q%12, from the numbers 0,1,2,3,4,5,6,7,8,9,10,11,
+		//	was been excluded (two exceptions) the values r = 0,2,4,6,8,10,1,3,5,7,9 (sorted: 0,1,2,3,4,5,6,7,8,9,10), and only one option remains - value 11.
+		//	Consequently, r = 11, and any Safe-Prime nubmer (except for 5, 7), can be represented in form q = 12*x + 11;
+		//	Now, let, k = (x+1); q = 12*(x+1) - 1 = 12k - 1; Consequently, q = 12k - 1.
+		//	
+		//	Original statement is proven.
+	
+		if(!(number == new BigInteger()) && number.isSafePrime()){return number;}
+		
+		BigInteger p = new BigInteger();
+		BigInteger prime = new BigInteger();
+		if(number == new BigInteger()){
+			prime.genRandomBits(bits, rand);
+		}else{
+			prime = number;
+		}
+		
+		prime = (
+					(prime.isProbablePrime(confidence))									//if already prime
+						? prime															//use it
+						: prime.prevprime()
+				)
+		;
+		
+//		return new BigInteger(0);	//temp test...
+		
+		prime = (																		//find next or previous prime, (12k - 1)
+							(!mode.Contains("prev"))
+								? ( ( prime - ( prime % 12 ) + 12 ) - 1 )	//	((p - (p%12) + 12) - 1) 	->	next number			(12k - 1)
+								: ( prime - ( prime % 12 ) - 1 )			//	(p - (p%12) - 1) 			-> 	previous number		(12k - 1)
+				)
+		;
+
+		do{
+			prime = ( (mode.Contains("prev")) ? (prime-12) : (prime+12) );	//next or previous nubmer (12k-1)
+			//find next prime p, by rolling, using MillerRabin() primality check
+			p = (
+					( mode.Contains("doubled"))
+						? ((prime*2)+1)					//make p*2+1
+						: (prime-1)/2						//or (p-1)/2
+				)
+			;
+		}while(
+				(prime>0)
+			&&	(
+					(!prime.isProbablePrime(confidence))		//check primality for prime
+				||	(!p.isProbablePrime(confidence))			//and p
+			)
+		);
+		p = ( ( mode.Contains( "doubled" ) ) ? p : prime );	//return safe prime, if next or previous was been Sofi-Germen prime, and need to return doubled Safe-prime.
+		
+		return p;									//return a safe prime
+    }
+
+
+	public static bool isStrongPrime(
+		BigInteger p
+	,	BigInteger s
+	,	BigInteger r
+	,	BigInteger t
+	,	int confidence = 10
+	){
+		return	(																//true when
+					(
+							p.isProbablePrime(confidence)						//p - is prime
+						&&	s.isProbablePrime(confidence)						//s - is prime
+						&&	r.isProbablePrime(confidence)						//r - is prime
+						&&	t.isProbablePrime(confidence)						//t - is prime
+					)
+					&&															//and
+					(
+						//criteries for a Strong prime:
+							( ( (p+1) % s) == 0 )				//(p+1) have divisor s
+						&&	( ( (p-1) % r) == 0 )				//(p-1) have divisor r
+						&&	( ( (r-1) % t) == 0 )				//(r-1) have divisor t
+					)
+				)	//		when this all is true - return true, else - false.
+		;
+	}
+
+
+	public static Object[] StrongPrime =	new Object[]{
+			(BigInteger)new BigInteger()	//	p
+		,	(BigInteger)new BigInteger()	//	s
+		,	(BigInteger)new BigInteger()	//	r
+		,	(BigInteger)new BigInteger()	//	t
+		}
+	;
+
+
+	public static Object[] genStrongPrime(	//Gordon's Algorithm, to generate Strong Prime (cryptography).
+			int		bits		=	20
+		,	int		confidence	=	10
+		,	int		maxIter		=	1000
+		,	bool	strings		=	false
+		,	Random	rand		=	null
+	)
+	{
+		if(object.ReferenceEquals(null, rand)){ rand = new Random(); }
+		
+		BigInteger s = new BigInteger();
+		s.genRandomBits(bits, rand);
+		s = s.prevprime();
+
+		BigInteger t = new BigInteger();
+		t.genRandomBits(bits, rand);
+		t = t.prevprime();
+		
+		BigInteger r = new BigInteger(4); 					//start - 4, first not prime.
+		for(
+			BigInteger l = new BigInteger(1);				//from l = 1
+			(												//while
+					( l <= bitLength(t) )						//l<=t.bitlength()
+				&&	!r.isProbablePrime(confidence)				//and r not a prime
+			);
+			l++												//compute r, and increment l while contition is true
+		){
+			r = (1 + (l*t));								// r = 1+l*t
+		}
+		BigInteger p0 = ( ( ( 2 * ( s.modPow( (r-2) , r ) ) ) * s ) - 1 ) ;		//		p0 = ( (2*(s^(r-2) mod r)*s) - 1 )
+	
+		BigInteger p = new BigInteger(4); 								//start - 4, first not a prime.
+		
+		int limit = maxIter;											//up to limit iterations in cycle, (1000 by default, if undefined).
+		for(
+			BigInteger j = new BigInteger(1);							//from start j = 1
+			(															//while
+					!isStrongPrime(p, s, r, t, 20)						//p is not a strong-prime
+				&&	(limit > 0)											//and number of iterations is not reached
+			);
+			j++															//compute p, and then increment j, and continue
+		){
+			p = ( p0 + ( ( ( 2 * j ) * r ) * s ) );						//p = p0 + 2*j*r*s
+			limit--;													//decrease limit-value
+		}
+
+		//	Proof, that prime p, generated with Gordon's algorithm, is a strong-prime:
+		//		1. 	s^(r-1) === 1 (mod r) ; -> this is a corollary of Fermat's theorem.
+		//			Consequently, p0 = 1 (mod r); p0 = -1 (mod s);
+		//		2. After all:
+		//			p-1 = p0 + 2jrs - 1 = 0 (mod r);	and (p-1) have divisor r
+		//			p+1 = p0 + 2jrs + 1 = 0 (mod s);	and (p+1) have divisor s
+		//			r-1 = 2it = 0 (mod t);				and (r-1) have divisor t
+		
+		
+		if(strings == true){
+			//Save as strings
+			StrongPrime =	new Object[]{
+					(string)p.ToString()	//	p
+				,	(string)s.ToString()	//	s
+				,	(string)r.ToString()	//	r
+				,	(string)t.ToString()	//	t
+				}
+			;
+		}else{
+			//or save as BigIntegers
+			StrongPrime =	new Object[]{
+					(BigInteger)p			//	p
+				,	(BigInteger)s			//	s
+				,	(BigInteger)r			//	r
+				,	(BigInteger)t			//	t
+				}
+			;
+		}
+		return (
+					(isStrongPrime(p, s, r, t))													//if p is a strong prime
+						? StrongPrime															//return object with results
+					//StrongPrime
+						: genStrongPrime(bits, confidence, maxIter, strings, rand)				//else one more try, with default limit.
+				)
+		;
+	}
+
+
     /// <summary>
     /// Generates a random number with the specified number of bits such that gcd(number, this) = 1
     /// </summary>
@@ -3270,4 +3573,1460 @@ public class BigInteger
     //        //Console.WriteLine(System.Environment.TickCount - dwStart);
 
     //}
+	
+	
+//--------------------BEGIN RSABigInteger:--------------------
+
+//	//Description the following code up to the end.
+//	RSA allow to do the following RSA-operations:
+//		1. Encrypt (by publicKey) the message to cipher, and decrypt that message (by privateKey) from cipher.
+//			e - public exponent, n - modulus, d - secret exponent, (e, n) - publicKey, (d, n) - privateKey,
+//			m - message, c - encrypted message (cipher), m_ - decrypted message.
+//				1.	Alice:		Generate privateKey (d, n), and get publicKey (e, n), from this privateKey.
+//				2.	Alice:		Send she's publicKey (e, n) to another correspondent, to Bob.
+//				3.	Bob:		c = m^e mod n;			- 		Encrypt data by publicKey.
+//				4.	Bob:		c 						->		Send this computed cipher to Alice.
+//				5.	Alice:		m_ = c^d mod n			-		Decrypt data into m_ by she's secure priveteKey.
+//				Property:		m_ == m					-		decrypted message, this is equal of original Bob's open-message.
+//
+//		2. Sign (by privateKey) the message to signature, and extract that message (by publicKey) from signature.
+//			e - public exponent, n - modulus, d - secret exponent, (e, n) - publicKey, (d, n) - privateKey,
+//			m - message, s - sinature, m_ - extracted message.
+//				1.	Alice:	s = m ^ d mod n				-	generate digital signature "s" ( encrypt message "m" by privKey "(d, n)" )
+//				2.	Alice:	(m, s)						->	send to another correspondent, Bob.
+//				3.	Bob:	m_ = s ^ e mod n			-	extract message from "s" ( decrypt cipher "s", by pubKey "(e, n)" )
+//				4.	Bob:	(m_ == m)					-	Verify signature (compare existing "m" with decrypted "m_")
+//
+//	All this operations can be processed, using fast modPow function, when:
+//		n is a some BigInteger;
+//		m, e, d - BigIntegers, with value up to (n-1);
+//		then, c and s can have value up to (n-1) too (just because power is by modulus n).
+//
+//	Lengths of values:
+//		1.
+//			All values of "c" (c = m^e mod n), just because this is by modulus n, this values are contains in range [0, ..., (n-1)].
+//			(n-1) is a maximum, because next value, n, will be encrypted as: (n mod n) = 0 = (0 mod n).
+//			So (n-1) is max value in that range, including of this, with including the null too.
+//		
+//		2.	Property of RSA encrypt-decrypt actions: m can be unequivocally encrypted to c, and unequivocally decrypted back from c, by modulus n.
+//		
+//		3.	When m = n, ( c = (m^e mod n) = (n^e mod n) = 0 = (0^e mod n) ).
+//			In this case you can see the repetition of the output value "c",
+//			and this can not be decrypted unequivocally, to "n" (decrypted message = 0).
+//		
+//		4.	Thus, means m can be in range [0, ... (n-1)] too, and m^e can give an unique values,
+//			which by modulus n, can give unique values in the same range: [0, ... (n-1)].
+//		
+//		5.	So, "m"-value, as decimal value (BigInteger), can not be greater than (n-1),
+//			and this value must to contains, in range [0, ..., (n-1)].
+//		
+//		6. 	In this case, bitlength of "m"-value can contains in range [0, ..., (n_bitlength-1)],
+//			where (n_bitlength-1) - max bitlength of decimal "m"-value (BigInteger).
+//			
+//		7.	Max bytelength of c-value, "c_bytelength" is ( ( ( n_bitlength - ( n_bitlength % 8 ) ) / 8 ) + ((( n_bitlength % 8 ) > 0)?1:0) )
+//			so bytelength of "m"-value, must contains in range [ 0, ..., ( c_bytelength - 1 ) ].
+//		
+//		7.	Then any "m", with this (bit/byte)-lengths, will be a number, with value in range [0, ..., (n-1)],
+//			and this can be unequivocally encrypted to "c", and decrypted back, from "c".
+//			
+//		8.	Property:
+//			m
+//			with bitlength in range [0, ..., (n_bitlength-1)]
+//			or with bytelength in range [ 0, ..., ( c_bytelength - 1 ) ],
+//			encrypting into c
+//			with bitlength in range [0, ..., n_bitlength]
+//			or with bitlength in range [0, ..., c_bytelength].
+//	
+//	All this allow to do encryption/decryption the data with arbitrary length,
+//	by read and write this as blocks with specified (bit/byte)-lengths.
+//	Because of different blocklengths, the following operations are not a reversive-operations:
+//
+//	Encryption data, with arbitrary byte length:
+//		1.	Read source data of "m", with arbitrary length, block-by-block,
+//				with block-bitlength (n_bitlength-1),
+//				or with block-bytelength ( c_bytelength - 1 ),
+//				into blocks m0, m1, m2, m3, m4, ... m;
+//		2.	Convert each block to BigIntegers, with value in range [0, ... (n-1)];
+//		3.	Encrypt by PubKey, the each BigInteger into "c" in range [0, ... (n-1)],
+//				with max bitlength n_bitlength,
+//				or max bytelength c_bytelength.
+//		4.	Convert BigIntegers to bytes, and write this in correct offsets, in the blocks with fixed lengths.
+//		5.	Write blocks with encrypted cypher in output cypher blocks-by-blocks.
+//		6.	Add ulong-value (8 bytes), with the length of last block, in the end of encrypted data.
+//
+//	Decryption cipher, into data with arbitrary byte length:
+//		1.	Read ulong value with the length of last block, in the end of file (last 8 bytes).
+//		2.	Read cipher "c", with arbitrary length, block-by-block,
+//				with block-bitlength (n_bitlength),
+//				or with block-bytelength c_bytelength,
+//				and read up to the end, into blocks c0, c1, c2, c3, c4, ..., c;
+//		2.	Convert each block to BigInteger, with value in range [0, ..., (n-1)].
+//		3.	Decrypt by PrivKey, the each BigInteger into "m_" in range [0, ..., (n-1)],
+//				with max bitlength (n_bitlength-1),
+//				or max bytelength ( c_bytelength - 1 ).
+//		4.	Convert BigIntegers to bytes, and write this in correct offsets, in the blocks.
+//		5.	Write blocks with decrypted data blocks-by-blocks.
+//		6.	Skip ulong-value with last block bytelength, in the end, in readed data with cypher.
+//
+//	This two methods allow to encrypt-decrypt files, and bytearrays, and binary data, with arbitrary length.
+//		byte[] encryptedBytes = BigInteger.EncryptBytes(PrivOrPubKeyFileOrXMLStringKey, byte[] sourceBytes, UseBigInteger, ByPriv);
+//		byte[] decryptedBytes = BigInteger.DecryptBytes(PrivOrPubKeyFileOrXMLStringKey, byte[] sourceBytes, UseBigInteger, ByPub);
+//	
+//	Extended methods for RSACryptoServiceProvider, in the "public static class RsaExtensions":
+//		byte[] encryptByPriv = (BigInteger.rsa).EncryptByPrivateKey(sourceBytes);	//return bytes
+//		byte[] decryptByPub = (BigInteger.rsa).DecryptByPublicKey(encryptByPriv);	//return bytes
+
+//		Implement this all, using BigIntegers,
+//		because
+//		RSACryptoServiceProvider.Encrypt() return another cypher, which is incompatible with decrypt as BigIntegers, and can encrypt only with pubKey, but not PrivKey.
+//		RSACryptoServiceProvider.Decrypt() can decrypt only with PrivKey, but not PubKey.
+//		The following code will implement encrypt/decrypt the data with arbitrary length, EncryptBytes(pub/priv) and DecryptBytes(priv/pub), using BigIntegers.
+//		optionally, there is possible to Encrypt
+
+	
+	//	extended methods
+	public static	string		Bi2Base64	( BigInteger bi )								//BigInteger -> to Base64-string.
+	{
+		return ( System.Convert.ToBase64String( bi	.getBytes() ) );
+	}
+
+	public static	BigInteger	B64ToBi		( string b64	)								//Base64-string -> to BigInteger.
+	{
+		return new BigInteger(Convert.FromBase64String(b64));
+	}
+	
+	//	Methods to work with Files and with ByteArrays.
+	public static	byte[]		Combine		(byte[] first, byte[] second)					//Combine, and concatenate two bytearrays.
+	{
+		byte[] bytes = new byte[first.Length + second.Length];
+		Buffer.BlockCopy(first, 0, bytes, 0, first.Length);
+		Buffer.BlockCopy(second, 0, bytes, first.Length, second.Length);
+		return bytes;
+	}
+
+	public static	bool		CompareFiles(string first_path="", string second_path="")	//Compare two files (filepaths).
+	{
+		System.IO.FileInfo first = new System.IO.FileInfo( first_path );
+		System.IO.FileInfo second = new System.IO.FileInfo( second_path );
+				
+		if (first.Length != second.Length){
+			Console.WriteLine("Files lengths of files not equal! first.Length: "+first.Length+" != second.Length: "+second.Length);
+			return false;
+		}
+		if (string.Equals(first.FullName, second.FullName, StringComparison.OrdinalIgnoreCase)){
+			Console.WriteLine("Same file, fullNames are equal! first.FullName: "+first.FullName+", second.FullName: "+second.FullName);
+			return true;
+		}
+
+		//else, if length is equal, and this is not the same file... Compare files by each byte:
+		using (FileStream fs1 = first.OpenRead()){
+			using (FileStream fs2 = second.OpenRead())
+			{
+				for (int i = 0; i < first.Length; i++)			//for each byte, up to first.length
+				{
+					int first_ith_byte = fs1.ReadByte();		//read byte from first file to int
+					int second_ith_byte = fs2.ReadByte();		//read byte from second file to int
+					if ( first_ith_byte != second_ith_byte){	//if not equal
+						Console.WriteLine(
+							"Byte i: "+i+
+							" not equal! "+first_ith_byte+		
+							"(1) !== "+second_ith_byte+"(2)"
+						);
+						return false;							//and return false
+					}
+				}
+			}
+		}
+		return true;											//else, if all bytea are equal - return true.
+	}
+
+	public static	bool		CompareBytes(byte[] one, byte[] two) 						//Compare two bytearrays with SequenceEqual ("using System.Linq;")
+	{ 
+		return one.SequenceEqual(two);
+	}
+	
+	public static	void		WriteAnotherFileIfExists(string filename, string data){		//Try to save "data" in "filename", or add timestamp to "filename", if "filename" already exists.
+		if (System.IO.File.Exists(filename)){
+			Console.WriteLine("File with filename "+filename+" is already exists!");
+			filename = DateTime.Now.ToFileTime()+filename;
+			Console.WriteLine("Generate new filename: "+filename);
+		}
+		System.IO.StreamWriter writter = System.IO.File.CreateText(filename);
+		writter.Write(data);
+		writter.Close();
+		return;
+	}
+	
+
+	//	public static fields to save RSA-keys.
+	//	rsa, pa_Priv, pa_Pub - if RSA-key.
+	//	e_value, d_value, n_value (and another - if UseBigInteger==true)
+
+	//when BigInteger not used for generated keys...
+	public static RSACryptoServiceProvider	rsa					=	new RSACryptoServiceProvider();					//define new RSACryptoServiceProvider
+	public static RSAParameters				pa_Priv				=	new RSAParameters();							//define new RSAParameters pa_Priv.
+	public static RSAParameters				pa_Pub				=	new RSAParameters();							//define new RSAParameters pa_Pub.
+	
+	// When BigInteger used for generated keys...
+	public static BigInteger				e_value				=	new BigInteger();								//define new BigInteger e_value.
+	public static BigInteger				d_value				=	new BigInteger();								//define new BigInteger d_value.
+	public static BigInteger				n_value				=	new BigInteger();								//define new BigInteger n_value.
+
+	//another values to save from keyFiles.
+	public static BigInteger				p_value				=	new BigInteger();								//define new BigInteger p_value.
+	public static BigInteger				q_value				=	new BigInteger();								//define new BigInteger q_value.
+	public static BigInteger				dp_value			=	new BigInteger();								//define new BigInteger dp_value.
+	public static BigInteger				dq_value			=	new BigInteger();								//define new BigInteger dq_value.
+	public static BigInteger				InverseQ_value		=	new BigInteger();								//define new BigInteger InverseQ_value.
+
+	public static string					xml_privKey			=	""					;							//privKey.
+	public static string					xml_pubKey			=	""					;							//pubKey.
+	
+	
+	public static void SaveXMLKeys(
+		bool UseBigInteger = false
+	)
+	{
+			if(UseBigInteger == false){									//if BigInteger not used to generate RSA-keys
+
+				if(!rsa.PublicOnly){
+					xml_privKey = rsa.									//from rsa
+												ToXmlString(true)			//export privkey
+												.Replace("<", "\n\t<")		//and format this as multistring
+												.Replace(">",">\n\t\t")
+												.Replace("\t\t\n","")
+												.Replace("\t</RSAKeyValue>\n\t\t","</RSAKeyValue>")
+												.Replace("\n\t<R","<R")
+					;
+				}
+				xml_pubKey = rsa.									//from rsa
+											ToXmlString(false)			//export pubkey
+												.Replace("<", "\n\t<")	//and format this as multistring
+												.Replace(">",">\n\t\t")
+												.Replace("\t\t\n","")
+												.Replace("\t</RSAKeyValue>\n\t\t","</RSAKeyValue>")
+												.Replace("\n\t<R","<R")
+				;
+			}
+			else{														//if BigInteger was used to generate RSA-keys
+				if(		!	(	d_value.Equals(		new BigInteger()	)	)	)	{
+					xml_privKey =	""									//generate XML-string for privkey
+											+	"<RSAKeyValueBigInteger>"
+											+		"<Modulus>"		+	( Bi2Base64(n_value			) )	+	"</Modulus>"
+											+		"<Exponent>"	+	( Bi2Base64(e_value			) )	+	"</Exponent>"
+											+		"<P>"			+	( Bi2Base64(p_value			) )	+	"</P>"
+											+		"<Q>"			+	( Bi2Base64(q_value			) )	+	"</Q>"
+											+		"<DP>"			+	( Bi2Base64(dp_value		) )	+	"</DP>"
+											+		"<DQ>"			+	( Bi2Base64(dq_value		) )	+	"</DQ>"
+											+		"<InverseQ>"	+	( Bi2Base64(InverseQ_value	) )	+	"</InverseQ>"
+											+		"<D>"			+	( Bi2Base64(d_value			) )	+	"</D>"
+											+	"</RSAKeyValueBigInteger>"	//and replace <RSAKeyValue> to <RSAKeyValueBigInteger>.
+											//This means <Exponent> was been generated as co-prime number and not last five Fermat's prime-number. 
+					;
+				
+					xml_privKey = 	xml_privKey					//format this string, as multiString, and replce
+										.Replace("<", "\n\t<")
+										.Replace(">",">\n\t\t")
+										.Replace("\t\t\n","")
+										.Replace("\t</RSAKeyValueBigInteger>\n\t\t","</RSAKeyValueBigInteger>")
+										.Replace("\n\t<R","<R")
+					;
+				}
+				else{
+					xml_privKey = "";
+				}
+				
+				xml_pubKey =	""									//generate XML-string for puKey
+										+	"<RSAKeyValueBigInteger>"
+										+		"<Modulus>"		+	( Bi2Base64(n_value			) )	+	"</Modulus>"
+										+		"<Exponent>"	+	( Bi2Base64(e_value			) )	+	"</Exponent>"
+										+	"</RSAKeyValueBigInteger>"	//and replace <RSAKeyValue> to <RSAKeyValueBigInteger>.
+										//This means <Exponent> was been generated as co-prime number and not last five Fermat's prime-number. 
+				;
+				
+				xml_pubKey = 	xml_pubKey						//format this string, as multiString, and replce
+									.Replace("<", "\n\t<")
+									.Replace(">",">\n\t\t")
+									.Replace("\t\t\n","")
+									.Replace("\t</RSAKeyValueBigInteger>\n\t\t","</RSAKeyValueBigInteger>")
+									.Replace("\n\t<R","<R")
+				;
+			}
+	}
+
+	public static void GenerateRSAKeys(	//Save generated RSA-keys in rsa, pa_Priv, and pa_pub - if RSA-keys and UseBigInteger==false, or in BigIntegers, if UseBigInteger == true.
+		bool UseBigInteger = false			//use BigInteger methods, to generate this keys, or use RSACryptoServiceProvider(bitlength)? (true/false)
+	,	int bitlength = 512					//bitlength can be specified, default value = 512, just for test (this is faster)
+	)
+	{
+//		Console.WriteLine("GenerateRSAKeys - bitlength: "+bitlength);
+		//start generate RSA-keys
+		if(UseBigInteger == false){									//if no need to use BigInteger
+			try{														//try
+//				Console.WriteLine("GenerateRSAKeys - UseBigInteger === false");
+				rsa = new RSACryptoServiceProvider(bitlength);				//Generate new RSA key with specified bitlength, or default
+				//and save this into rsa, pa_Priv, pa_Pub.
+				pa_Priv	=	rsa.ExportParameters(true);						//export parameters of privkey
+				pa_Pub	=	rsa.ExportParameters(false);					//export parameters of pubkey
+			}catch (Exception ex){										//if exception
+				Console.WriteLine( "Error:" + ex);							//show this
+			}
+		}
+		else if (UseBigInteger == true){							//if need to use BigInteger	
+			try{
+				Random rand = new Random();												//new random generator
+
+//				BigInteger bi_p = BigInteger.genPseudoPrime(bitlength/2, 40, rand);		//p
+//				BigInteger bi_q = BigInteger.genPseudoPrime(bitlength/2, 40, rand);		//q
+
+
+				//	Use Safe-Primes for p and q:
+				BigInteger bi_p = BigInteger.genSafePrime((bitlength/2),10,"previous",0,rand);		//p
+				BigInteger bi_q = bi_p;																	//q is p, on start.
+				while(bi_q.Equals(bi_p)){																//while q == p
+					bi_q		=	BigInteger.genSafePrime((bitlength/2),10,"previous",0,rand);		//generate safe prime q != p, with half-bitlength of n.
+				}
+
+		//		//	Use Strong-Primes for p and q:
+		//		BigInteger bi_p = (BigInteger)BigInteger.genStrongPrime((bitlength/2))[0];							//p
+		//		BigInteger bi_q = bi_p;																				//q is p, on start.
+		//		while(bi_q.Equals(bi_p)){																			//while q == p
+		//			bi_q		=	(BigInteger)BigInteger.genStrongPrime((bitlength/2))[0];						//generate safe prime q != p, with half-bitlength of n.
+		//		}
+
+
+				BigInteger bi_n = bi_p * bi_q;												//n = p*q
+
+				BigInteger lambdaN 		=	(bi_p - 1).lcm((bi_q - 1));						//lambdaN
+				BigInteger bi_e 		=	lambdaN.genCoPrime(bitlength/2, rand);
+				BigInteger bi_d			=	bi_e.modInverse(lambdaN);						//lambdaN - d			=	( e^(−1) mod phi_n ) - is working, because (phi_n % λ(n) === 0), and for when (d*e ≡ 1 (mod λ(n))), (d*e ≡ 1 (mod λ(n))) too. But (d > λ(n)) can be true.
+				
+			//	if( bi_e <= bi_d ){										//if e lesser or equals d
+			//		BigInteger temp = bi_d; bi_d = bi_e; bi_e = temp;	//swap bi_e <-> bi_d
+			//	}														//to return e, lesser than d, to keep secret a longer d.
+
+				BigInteger bi_dp		=	bi_d % (bi_p - 1);									//dp		=	(	d mod (p−1)		)
+				BigInteger bi_dq		=	bi_d % (bi_q - 1);									//dq		=	(	d mod (q−1)		)
+				BigInteger bi_InverseQ	=	bi_q.modInverse(bi_p);								//inverseQ	=	(	q^(−1) mod p	)
+
+				//Try to save this generated valued into rsa, pa_Priv, pa_Pub, or into BigIntegers.
+				//
+				//	XML RSA-keys format: 
+				//	<RSAKeyValue>
+				//		<Modulus>	Base64-encoded-number	</Modulus>
+				//		<Exponent>	Base64-encoded-number	</Exponent>
+				//		<P>			Base64-encoded-number	</P>
+				//		<Q>			Base64-encoded-number	</Q>
+				//		<DP>		Base64-encoded-number	</DP>
+				//		<DQ>		Base64-encoded-number	</DQ>
+				//		<InverseQ>	Base64-encoded-number	</InverseQ>
+				//		<D>			Base64-encoded-number	</D>
+				//	</RSAKeyValue>
+				//
+				//	n	-	Modulus
+				//	e	-	Exponent
+				//	p	-	P
+				//	q	-	Q
+				//	d	-	D
+				//
+				//	dp	-	DP, this is ( d mod (p−1) ), 
+				//	dq	-	DQ, this is ( d mod (q−1) ),
+				//	InverseQ - this is ( q^(−1) mod p ).
+				//
+				//	These are used in applying the Chinese Remainder Theorem to RSA decryption, which is an optimization technique.
+				//
+
+				try{
+					//Generate xml-string with RSA-privKey
+					string xmlString =	""
+										+	"<RSAKeyValue>"
+										+		"<Modulus>"		+	( Bi2Base64(	bi_n		) )	+	"</Modulus>"
+										+		"<Exponent>"	+	( Bi2Base64(	bi_e		) )	+	"</Exponent>"
+										+		"<P>"			+	( Bi2Base64(	bi_p		) )	+	"</P>"
+										+		"<Q>"			+	( Bi2Base64(	bi_q		) )	+	"</Q>"
+										+		"<DP>"			+	( Bi2Base64(	bi_dp		) )	+	"</DP>"
+										+		"<DQ>"			+	( Bi2Base64(	bi_dq		) )	+	"</DQ>"
+										+		"<InverseQ>"	+	( Bi2Base64(	bi_InverseQ	) )	+	"</InverseQ>"
+										+		"<D>"			+	( Bi2Base64(	bi_d		) )	+	"</D>"
+										+	"</RSAKeyValue>"
+					;
+					//Format this as a multistring.
+					xmlString = 	xmlString
+									.Replace("<", "\n\t<")
+									.Replace(">",">\n\t\t")
+									.Replace("\t\t\n","")
+									.Replace("\t</RSAKeyValue>\n\t\t","</RSAKeyValue>")
+									.Replace("\n\t<R","<R")
+					;
+					//import PrivKey to rsa from xml-string
+					rsa.FromXmlString(xmlString);						//here throw exception, when e is co-prime, and not last Fermat's prime.
+					pa_Priv	=	rsa.ExportParameters(true);				//export parameters of privkey
+					pa_Pub	=	rsa.ExportParameters(false);			//export parameters of pubkey
+				}
+				catch //(Exception ex)		//on error
+				{
+				//	Console.WriteLine( "Error on saving Keys as rsa, pa_Priv, pa_Pub:" + ex);	//show this
+
+				//	Console.WriteLine( "Save keys as BigInteger-values...");
+					try{																		//and try to save generated key-values, as BigIntegers.
+						//save pub (e,n) and priv (d, n);
+						e_value = bi_e;
+						d_value = bi_d;
+						n_value = bi_n;
+					
+						//save another values.
+						p_value				=	bi_p;
+						q_value				=	bi_q;
+						dp_value			=	bi_dp;
+						dq_value			=	bi_dq;
+						InverseQ_value		=	bi_InverseQ;
+					
+						//reset this values
+						rsa					=	new RSACryptoServiceProvider();					//define new RSACryptoServiceProvider
+						pa_Priv				=	new RSAParameters();							//define new RSAParameters pa_Priv.
+						pa_Pub				=	new RSAParameters();							//define new RSAParameters pa_Pub.
+				//		Console.WriteLine( "Done.");
+					}
+					catch	(Exception exception){												//on error
+						Console.WriteLine( "Error:" + exception);								//show this
+					}
+				}
+			}
+			catch	(Exception ex)																//if some error
+			{
+				Console.WriteLine( "Error:" + ex);												//show this
+			}
+		}
+		
+		Console.WriteLine("GenerateRSAKeys. SaveXMLKeys(UseBigInteger), UseBigInteger: "+UseBigInteger);
+		SaveXMLKeys(UseBigInteger);
+	}
+	
+	public static void GenerateRSAKeysAndSave(	//Generate RSA-keys and save this as XML-keys, into the files
+		string privKeyFile						//File to save PrivKey
+	,	string pubKeyFile						//File to save PubKey
+	,	bool UseBigInteger = false				//use BigInteger methods, to generate this keys, or use RSACryptoServiceProvider(bitlength)? (true/false)
+	,	int bitlength = 512						//bitlength can be specified, default value = 512, just for test (this is faster)
+	)
+	{
+		try
+		{
+			//Generate RSA-keys, and save this in (rsa, pa_Priv, pa_Pub)-values, or into BigIntegers.
+			GenerateRSAKeys(
+				UseBigInteger,				//use BigInteger methods, to generate this keys, or not? (true/false)
+				bitlength					//bitlength, default value = 512, just for test (this is faster)
+			);
+
+			//Save keys in files.
+			WriteAnotherFileIfExists(privKeyFile, xml_privKey);		//write PrivKey in file
+			WriteAnotherFileIfExists(pubKeyFile, xml_pubKey);		//Write PubKey in file
+		}
+		catch (Exception ex)			//on error
+		{
+			Console.WriteLine(ex);		//show this.
+		}
+	}
+	
+	public static void LoadKeyFile(			//Load keys (priv+pub) or pub only if pubKey
+		string KeyFile 						//from KeyFile or string with XML-pubKey or XML-privKey.
+	,	bool UseBigInteger = false			//load this as RSA-key into (rsa, pa_Priv, pa_Pub)-values, or load into BigInteger-values (true/false)
+	)
+	{
+		string xmlString = (												//get XML-string of privKey or pubKey
+								(KeyFile.Contains("<Modulus>"))					//if KeyFile, this is a string with key
+									? KeyFile										//use this string as xmlString
+									: System.IO.File.ReadAllText(KeyFile)			//or open file and read XML-key from file with xml.
+		);
+		UseBigInteger = (xmlString.Contains("RSAKeyValueBigInteger")) ? true : UseBigInteger;
+
+		if(
+				!xmlString.Contains("RSAKeyValueBigInteger")				//if BigInteger not been used to generate this key in xmlString
+			&&	UseBigInteger == false										//and if no need to UseBigInteger, to load key into BigIntegers
+		){																		//Load this key into (rsa, pa_Priv, and pa_Pub)-values.
+		
+																				//extract public key from "key"-file with xmlString.
+			rsa.FromXmlString(xmlString);										//and load key there, in RSACryptoServiceProvider rsa.
+		
+			if(xmlString.Contains("<D>")){										//if this was been a privkey, and this contains <D>-value of privKey (d, n)
+				pa_Priv =	rsa.ExportParameters(true);								//export privateKey from this to pa_Priv
+			}
+			pa_Pub	=	rsa.ExportParameters(false);								// (or/and) export the publicKey from this to pa_Pub.
+			
+			//then, leave empty values for all those BigInteger:
+			n_value			=	new BigInteger();
+			e_value			=	new BigInteger();
+			p_value			=	new BigInteger();
+			q_value			=	new BigInteger();
+			dp_value		=	new BigInteger();
+			dq_value		=	new BigInteger();
+			InverseQ_value	=	new BigInteger();
+			d_value			=	new BigInteger();
+		}
+		else if (												//else if
+				xmlString.Contains("RSAKeyValueBigInteger")		//BigInteger not been used to generate this key in xmlString
+			||	UseBigInteger == true							//or if need to load this key into BigInteger-values
+																//(for example, to do encrypt-by-priv, and decrypt-by-pub, using extended methods)
+		)
+		{
+			//Then, load this key, into BigInteger-values:
+			
+			//Load values from xml-string
+			var LoadedKey = XElement.Parse(xmlString);				//need to "using System.Xml";
+
+			if(xmlString.Contains("<D>")){												//if this was been a privKey, and this contains <D>-value
+				//decode values from base64 fields of XML - and import this into BigIntegers
+				n_value			=	B64ToBi((string)LoadedKey.Element("Modulus"));			//	n
+				e_value			=	B64ToBi((string)LoadedKey.Element("Exponent"));			//	e
+				p_value			=	B64ToBi((string)LoadedKey.Element("P"));				//	p
+				q_value			=	B64ToBi((string)LoadedKey.Element("Q"));				//	q
+				dp_value		=	B64ToBi((string)LoadedKey.Element("DP"));				//	dp
+				dq_value		=	B64ToBi((string)LoadedKey.Element("DQ"));				//	dq
+				InverseQ_value	=	B64ToBi((string)LoadedKey.Element("InverseQ"));			//	InverseQ
+				d_value			=	B64ToBi((string)LoadedKey.Element("D"));				//	d
+			}
+			else{																		//else if this was been pubKey
+				e_value			=	B64ToBi((string)LoadedKey.Element("Exponent"));			//	e
+				n_value			=	B64ToBi((string)LoadedKey.Element("Modulus"));			//	n - (e, n)-only is a pubKey.
+				p_value			=	new BigInteger();										//	and leave
+				q_value			=	new BigInteger();										//	this values
+				dp_value		=	new BigInteger();										//	all
+				dq_value		=	new BigInteger();										//	as
+				InverseQ_value	=	new BigInteger();										//	an empty
+				d_value			=	new BigInteger();										//	values
+			}
+		}
+//		Console.WriteLine("LoadKeyFile. KeyFile"+KeyFile+", SaveXMLKeys(UseBigInteger), UseBigInteger: "+UseBigInteger);
+		SaveXMLKeys(UseBigInteger);
+		//After all, key from keyFile, or from xmlString, is loaded into (rsa, pa_Priv, pa_Pub)-values, or into BigIntegers.
+	}
+
+	
+//
+//	EncryptFile, will encrypt file [src], into file [dest],
+//	EncryptBytes, will encrypt bytearray [src], into bytearray [dest],
+//	both will encrypt [src] to [dest]
+//	by using pubkey from file [key],
+//	or by using pubkey, which was been extracted from privkey in file [key],
+//	or by using privKey from file [key], when byPriv == true (sign the message, and generate the digital signature).
+//	
+//	(d, n) - privkey, (e, n) - pubkey; e - public exponent, d - private exponent, n - modulus, c - ciphertext, 
+//	c	= m ^ (e or d) mod n;		- encryption by pubkey or privkey (sign),
+//	m'	= c ^ (d or e) mod n;		- decryption by privkey or pubkey (extract message from signature to verify it),
+//	
+//	cypherBytelength = ( ( ( n_bitlength - ( n_bitlength % 8 ) ) / 8 ) + ((( n_bitlength % 8 ) > 0)?1:0) );
+//	File will be splitted by blocks with ( cypherBytelength - 1 ) bytes.
+//	This blocks will be encrypted by pubkey from "key", or pubkey which is extracted from prikey "key".
+//	Pubkey - is (e, n), where n, this is a modulus - a big number with specified n_bitlength.
+//	The result ciphertext have n_bitlength bits, or cypherBytelength bytes, and will be writted by blocks in encrypted file.
+//
+//	Last block will be encrypted as is, but after encrypted block will be added ulong-value (8 bytes) with LastBlockLength.
+//
+
+	public static int SubtractBytes, block_size, block_length;	//define this variables.
+	
+	public static int bitLength(BigInteger value){
+//		Console.WriteLine("bitLength - value:"+value.ToString());
+		int bitLength = 0;
+		do
+		{
+			bitLength++;
+			value /= 2;
+		} while(value != 0);
+//		Console.WriteLine("bitLength - bitLength:"+bitLength);
+//		Console.WriteLine("bitLength - value.byteLength:"+value.getBytes().Length);
+		return bitLength;
+	}
+	
+	private static void set_lengths(	//set lengths of blocks to read-write
+		int n_bitlength					//bitlength of modulus n from KeyFile
+	,	bool UseBigInteger = false		//Use BigInteger to encrypt-decrypt-data or not? true/false
+	)
+	{
+//			Console.WriteLine("set_lengths - n_bitlength: "+n_bitlength);
+			//
+			//	For rsa.Encrypt() and rsa.Decrypt():
+			//		Having looked at some of the information on RSA encryption modes,
+			//		it would appear that PKCS#1 v1.5 (which is calling as rsa.Encrypt(..., false), and rsa.Decrypt(..., false))
+			//		"...can operate on messages of length up to k - 11 octets (k is the octet length of the RSA modulus)"
+			//	
+			//	For BigInteger.EncryptFile(), BigInteger.EncryptBytes(), BigInteger.DecryptFile(), BigInteger.DecryptBytes():
+			//		dest_maxBitLength = n_bitlength;
+			//		dest_maxBitLength = ( ( ( n_bitlength - ( n_bitlength % 8 ) ) / 8 ) + ((( n_bitlength % 8 ) > 0)?1:0) );
+			//		where "dest_maxBitLength" - n_bitlength of modulus n-value in key.
+			//		
+			//		src_maxBitlength = dest_maxBitLength - 1;
+			//		src_maxByteLength = dest_maxBitLength - 1;
+			//
+			
+			//set this values:
+			SubtractBytes = ((UseBigInteger == true ) ? 1 : 11);											//select how many bytes need to subtract from each block.
+
+			block_size           =         (															//block length for destination file = n_bytelength (+ 1, when n_bitlength%8 > 0).
+													( 
+														(
+															n_bitlength
+															-
+															( n_bitlength % 8 )
+														)
+														/
+														8
+													)
+													+
+													(
+														(
+															( n_bitlength % 8 ) > 0
+														)
+														? 1
+														: 0
+													)
+												);
+			block_length         =         block_size-SubtractBytes;									//block length for source file
+			
+			return;	//and return, then.
+	}
+
+//
+//	Encrypt file [src], into file [dest], by using pubkey from file [key],
+//	or by using pubkey, which was been extracted from privkey in file [key].
+//	(d, n) - privkey, (e, n) - pubkey;
+//	c	= m ^ e mod n;		- encryption by public key
+//	m'	= c ^ d mod n;		- decryption by private key.
+//
+//	File will be splitted by blocks with ((bitlength/8) - 1) bytes.
+//	This blocks will be encrypted by pubkey from "key", or pubkey which is extracted from prikey "key".
+//	Pubkey - is (e, n), where n, this is a modulus - a big number with specified n_bitlength.
+//	The result ciphertext have n_bitlength bits, and will be writted by blocks in encrypted file.
+//
+//	Last block will be encrypted as is, but after encrypted block will be added ulong-value (8 bytes) with LastBlockLength.
+//
+
+
+	//
+	//	Encryption file or bytearray:
+	//		1. Read file by blocks (KeyLength-SubtractBytes)
+	//		2. Encrypt each block by pub or priv, and write this in the block with KeyLength.
+	//		3. Block-by-block, up to the end of file.
+	//		4. Add ulong value (8 bytes) with length of last block, in the end of encrypted data.
+	//		6. Write this all in file, or in bytearray.
+	//		
+	//		Three methods used to encrypt data:
+	//		public static	void	EncryptFullBlockOrLastBlock	-	encrypt one block, and write this in ref.
+	//		public static	byte[]	EncryptFullBlockOrLastBlock	-	return bytearray.
+	//		public static	void	EncryptFile					-	encrypt, and write as file
+	//		private static	void	EncryptBytes				-	encrypt and write bytearray by ref
+	//		public static	byte[]	EncryptBytes				-	encrypt, and return bytearray.
+	//
+
+	
+	//
+	//	Encrypt one block from "buffer", with "block_size", in each iteration of read "data",
+	//	or encrypt last block in "buffer" with length "c",
+	//	and save the encrypted ciphertext in "encbuffer", by reference (ref).
+	//	Encrypt this by pubkey, which is contains in "rsa",
+	//	and encrypt with rsa.Encrypt(), or BigInteger modPow method - UseBigInteger (true/false);
+	//	
+	//	This method will be called on each iteratio of reading blocks of "source data",
+	//	as from an FileStream, or MemoryStream.
+	//	
+	//	Encrypted data will contains in "encbuffer".
+	//
+	
+	
+	public static	void	EncryptFullBlockOrLastBlock(	//encrypt full block or last block inside the cycles.
+		ref RSACryptoServiceProvider rsa	//RSACryptoServiceProvider, with imported pubKey
+	,	ref byte[] buffer					//readed buffer from the source file
+	,	ref byte[] encbuffer				//already defined encbuffer, as reference
+	,	ref int block_size					//already defined block_size, as reference
+	,	ref int c							//number of readed bytes, as reference
+	,	ref bool UseBigInteger				//use BigInteger or not? true/false
+	,	ref BigInteger ed					//(if UseBigInteger = true, then) ed - e or d. e (public exponent), if encrypt by pubkey (e, n); or d (secret exponent), if encrypt by privkey (d, n)
+	,	ref BigInteger n					//(if UseBigInteger = true, then) n - modulus
+	)
+	{
+//		Console.WriteLine("ed: "+ed.ToString());
+//		Console.WriteLine("n: "+n.ToString());
+		encbuffer = new byte[block_size];	//create new encbuffer with block_size.
+		if (c == buffer.Length)				//if this was been readed a full block, and not a last block - just encrypt it.
+		{
+			if(UseBigInteger == false){									//if no need to use BigInteger modPow to encrypt
+				encbuffer = rsa.Encrypt(buffer, false);						//just encrypt by using rsa.Encrypt()
+			}else{														//else
+//				Console.WriteLine("(new BigInteger	(buffer))"+(new BigInteger	(buffer)));
+			
+				//use BigInteger
+				byte[] encryptedBuffer;										//define new bytearray for encryptedBuffer (this can have a different bytelength)
+						encryptedBuffer = (									//and encrypt there
+							(new BigInteger	(buffer))						//the buffer
+							.modPow	(										//by using modPow method
+								ed,											//to encrypt this buffer, into BigInteger, by e or d
+								n											//and modulus n
+							)
+						)
+						.getBytes()											//and getBytes from this result-BigInteger.
+				;
+//				Console.WriteLine("(new BigInteger	(encryptedBuffer))"+(new BigInteger	(encryptedBuffer)));
+				//independent of bytelength of result bytearray, write this in the encbuffer
+				Buffer.BlockCopy(encryptedBuffer, 0, encbuffer, (encbuffer.Length-encryptedBuffer.Length), encryptedBuffer.Length);
+			}
+		}
+		else //else if last block, and readed bytes not equals of buffer length.
+		{
+			//slice this buffer up to c-value:
+			byte[] buffer2 = new byte[c];
+			for (int i = 0; i < c; i++){
+				buffer2[i] = buffer[i];
+			}
+
+			if(UseBigInteger == false){						//if no need to use BigInteger to encrypt
+				encbuffer = rsa.Encrypt(buffer2, false);		//just use rsa.Encrypt()
+			}else{											//else
+//				Console.WriteLine("(new BigInteger	(buffer2))"+(new BigInteger	(buffer2)));
+				//use BigInteger
+				byte[] encryptedBuffer;						//define new encrypted buffer for result, this can have different length
+					encryptedBuffer = (							//and encrypt
+						(new BigInteger	(buffer2))				//buffer2
+							.modPow	(ed, n)						//by using BigInteger modPow method
+					)
+					.getBytes()								//and get bytes from result BigInteger, then.
+				;
+//				Console.WriteLine("(new BigInteger	(encryptedBuffer))"+(new BigInteger	(encryptedBuffer)));
+				
+				//after this, write bytes of result BigInteger with cypher, into encbuffer, independent of bytelength of this result.
+				Buffer.BlockCopy(encryptedBuffer, 0, encbuffer, (encbuffer.Length-encryptedBuffer.Length), encryptedBuffer.Length);
+			}
+
+			//After encryption of last block of the source data, add ulong with the length of this block, in the end of encrypted result.
+			if(UseBigInteger == true){									//only if BigInteger modPow used for encryption
+				ulong number = Convert.ToUInt64(c);						//the number of readed data bytes
+				byte[] LastBlockLength = new byte[8];					//create bytearray with 8 bytes
+				LastBlockLength = BitConverter.GetBytes(number);		//convert ulong to bytearray
+				if (BitConverter.IsLittleEndian){						//if this bytes was been LittleEndian
+					Array.Reverse(LastBlockLength);						//Reverse the bytearray
+				}
+
+				encbuffer = Combine(encbuffer, LastBlockLength);			//and append this 8 bytes with ulong value in the end of encrypted data
+			}
+		}
+		//after this all, encbuffer by that reference, will contains an encrypted ciphertext, and this can be writted.
+	}
+
+	public static	byte[]	EncryptFullBlockOrLastBlock(	//The same, but this method will return encbuffer, as bytearray.
+		ref RSACryptoServiceProvider rsa	//RSACryptoServiceProvider, where pubKey is already imported.
+	,	ref byte[] buffer					//readed buffer
+	,	ref int block_size					//block_size of this
+	,	ref int c							//length of readed buffer
+	,	ref bool UseBigInteger				//encrypt with BigInteger modPow method - true, or with rsa.Encrypt() - false;
+	,	ref BigInteger ed
+	,	ref BigInteger n
+	)
+	{
+		byte[] encbuffer = new byte[block_size];	//define encbuffer, as a bytearray
+
+		EncryptFullBlockOrLastBlock(				//encrypt
+			ref rsa,
+			ref buffer,
+			ref encbuffer,							//and save result in encbuffer by reference
+			ref block_size,
+			ref c,
+			ref UseBigInteger,
+			ref ed,
+			ref n
+		);
+
+		return encbuffer;					//return encbuffer.
+	}
+
+	public static	void	EncryptFile(	//Encrypt src-file to dest-file by pubKey or privKey
+		string key=""						//key for encrypt - the file/xml-string pub, or with xml-priv, to get pub from it, if byPriv == false, else with priv.
+	,	string src = ""						//src - input file to encrypt
+	,	string dest = ""					//dest - output file save encryted ciphertext
+	,	bool UseBigInteger = false			//true - use, false - use rsa.Encrypt() and rsa.Decrypt()
+	,	bool byPriv = false					//default encryption, by publicKey - false, else - true, and encrypt by priv, to decrypt by pub (sign the message, to verify result cipher as signature).
+	)
+	{
+		LoadKeyFile(key);			//extract public key from "key"-file with xml.
+
+		int n_bitlength = 0;
+
+		if(UseBigInteger == false){
+			n_bitlength = rsa.KeySize;													//then, get n_bitlength of modulus from RSA-key.
+		}
+		else{
+			//n_bitlength = n_value.dataLength * 32;
+			n_bitlength = bitLength(n_value);
+		}
+
+		//create two FileStreams
+		System.IO.FileStream fin = System.IO.File.Open(src, System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.Read);			//FileStream for input file
+		System.IO.FileStream fout = System.IO.File.Open(dest, System.IO.FileMode.Create, System.IO.FileAccess.Write, System.IO.FileShare.Write);	//FileStream for output file
+
+		//and try to encrypt the source file "src", with this pubkey.
+		try
+		{
+			set_lengths(n_bitlength, UseBigInteger);
+
+			System.IO.FileInfo finfo = new System.IO.FileInfo( src );					//get file info of src-file
+
+			byte[] buffer = new byte[ block_length ];									//set size of block to read the source file
+			byte[] encbuffer = new byte[ block_size ];									//set size of block to write in destination encrypted file
+			int c = 0;																	//srart value of count = 0
+
+			BigInteger ed = null;
+			BigInteger n = null;
+
+			if(UseBigInteger == false){													//if no need to use BigInteger
+				ed = (
+					(byPriv == true)														//if byPriv == true
+					?	new BigInteger	(pa_Priv.D)												//then, d -> to BigInteger
+					:	new BigInteger	(pa_Pub.Exponent)										//else, e -> to BigInteger
+				);
+				n = (new BigInteger	(pa_Pub.Modulus));										//n -> to BigInteger
+			}else{																		//else, if UseBigInteger: 
+				ed = (
+					(byPriv == true)														//if byPriv == true
+					?	d_value																	//then, d -> to BigInteger
+					:	e_value																	//else, e -> to BigInteger
+				);
+				n = n_value;																//n -> to BigInteger
+			}
+			while ((c = fin.Read(buffer, 0, block_length )) > 0)	//for each block of readed source file, including the last block
+			{
+				//encrypt by pub into the encbuffer, using rsa.Encrypt() or BigInteger.
+				encbuffer = EncryptFullBlockOrLastBlock(ref rsa, ref buffer, ref block_size, ref c, ref UseBigInteger, ref ed, ref n);
+				fout.Write(encbuffer, 0, encbuffer.Length);			//and write encbuffer into the destination file.
+			}
+			fin.Close();	//after all, close input file
+			fout.Close();	//and close output file
+		}
+		catch (Exception ex)	//if try fails, show throw exception
+		{
+			fin.Close();
+			fout.Close();
+			Console.WriteLine( "\nError:" + ex);
+		}
+	}
+
+	
+	//	Encrypt bytearray from src to dest, by using pubkey in key, and encrypt it with BigInteger modPow, or with rsa.Encrypt();
+	
+	private static	void	EncryptBytes(	//The same but encrypt bytearrays, anc create MemoryStreams, instead of FileStreams
+		string key							//key - pub, for encrypt, or priv, to get pub from it, and encrypt then, if byPriv == false. This can be xml-string with key too.
+	,	ref byte[] src						//reference to bytearray with source data	
+	,	ref byte[] dest						//reference to bytearray with destination cipher data
+	,	bool UseBigInteger = false			//Need use BigInteger, or use rsa.Encrypt()? true/false
+	,	bool byPriv = false					//encrypt by privKey to sing the message, and decrypt by pubKey, then.
+	)
+	{
+		LoadKeyFile(key, UseBigInteger);			//extract public key from "key"-file with xml.
+		int n_bitlength = 0;
+		
+		if(UseBigInteger == false){
+			n_bitlength = rsa.KeySize;													//then, get n_bitlength of RSA-key.
+		}
+		else{
+			//n_bitlength = n_value.dataLength * 32;
+			n_bitlength = bitLength(n_value);
+		}
+
+		MemoryStream fin 	=	new MemoryStream(src);	//Create new MemoryStream for src
+		MemoryStream fout	=	new MemoryStream();		//Create new MemoryStream for dest
+
+		try
+		{
+			set_lengths(n_bitlength, UseBigInteger);
+			
+			byte[] buffer = new byte[ block_length ];
+			byte[] encbuffer = new byte[ block_size ];
+			int c = 0;
+
+			BigInteger ed = null;
+			BigInteger n = null;
+			
+			if(UseBigInteger == false){													//if no need to use BigInteger
+				ed = (
+					(byPriv == true)														//if byPriv == true
+					?	new BigInteger	(pa_Priv.D)												//then, d -> to BigInteger
+					:	new BigInteger	(pa_Pub.Exponent)										//else, e -> to BigInteger
+				);
+				n = (new BigInteger	(pa_Pub.Modulus));										//n -> to BigInteger
+			}else{																		//else, if UseBigInteger: 
+				ed = (
+					(byPriv == true)														//if byPriv == true
+					?	d_value																	//then, d -> to BigInteger
+					:	e_value																	//else, e -> to BigInteger
+				);
+				n = n_value;																//n -> to BigInteger
+			}
+
+			while ((c = fin.Read(buffer, 0, block_length )) > 0)
+			{
+				Console.WriteLine("enc: buffer: "+BitConverter.ToString(buffer).Replace("-", string.Empty)+" "+buffer.Length);
+				//encrypt by pub or priv into the encbuffer, using rsa.Encrypt() or BigInteger.
+				encbuffer = EncryptFullBlockOrLastBlock(ref rsa, ref buffer, ref block_size, ref c, ref UseBigInteger, ref ed, ref n);
+				fout.Write(encbuffer, 0, encbuffer.Length);			//and write encbuffer into the destination file.
+				Console.WriteLine("enc: encbuffer: "+BitConverter.ToString(encbuffer).Replace("-", string.Empty)+" "+encbuffer.Length);
+				buffer = new byte[ block_length ];
+			}
+			fin.Close();
+			dest = fout.ToArray();
+			fout.Close();
+		}
+		catch (Exception ex)
+		{
+			fin.Close();
+			dest = fout.ToArray();
+			fout.Close();
+			Console.WriteLine( "\nError:" + ex);
+		}
+	}
+		
+	
+	//	return "dest"-bytearray
+	
+	public static	byte[]	EncryptBytes(	//The same, but return "dest"-bytearray with encrypted-cipher
+		string key
+	,	byte[] src
+	,	bool UseBigInteger = false
+	,	bool byPriv = false
+	)
+	{
+		byte[] dest = new byte[0];
+		EncryptBytes(
+			key
+		,	ref src
+		,	ref dest
+		,	UseBigInteger
+		,	byPriv
+		);
+		return dest;
+	}
+
+
+
+	//
+	//	Decryption file or bytearray:
+	//		1. Read file by blocks with KeyLength
+	//		2. Decrypt each block by pub or priv, and write this in the block with (KeyLength-SubtractBytes).
+	//		3. Block-by-block, up to the end of file.
+	//		4. skip ulong value (8 bytes) with length of last block, in the end of encrypted data.
+	//		6. Write this all in file, or in bytearray.
+	//		
+	//		Three methods used to encrypt data:
+	//		public static	void	DecryptFullBlockOrLastBlock	-	decrypt one block, and write this in ref.
+	//		public static	byte[]	DecryptFullBlockOrLastBlock	-	return bytearray.
+	//		public static	void	DecryptFile					-	decrypt file, and write as file.
+	//		private static	void	DecryptBytes				-	decrypt bytearray, and write bytearray by ref
+	//		public static	byte[]	DecryptBytes				-	decrypt and return bytearray
+	//
+
+
+	
+	//
+	//	Decrypt one block from "buffer", with "block_size", in each iteration of read "cipherdata",
+	//	or encrypt last block in "buffer" with length "c",
+	//	and save the encrypted ciphertext in "encbuffer", by reference (ref).
+	//	Encrypt this by pubkey, which is contains in "rsa",
+	//	and encrypt with rsa.Encrypt(), or BigInteger modPow method - UseBigInteger (true/false);
+	//	
+	//	This method will be called on each iteration of reading blocks of "source data",
+	//	as from an FileStream, or MemoryStream.
+	//	
+	//	Encrypted data will contains in "encbuffer".
+	//
+
+	public static	void	DecryptFullBlockOrLastBlock(	//Decrypt full block or last block inside the cycle.
+		ref RSACryptoServiceProvider rsa	//RSACryptoServiceProvider, with imported pubKey
+	,	ref byte[] buffer					//readed buffer from the source file
+	,	ref byte[] decbuffer				//already defined decbuffer, as reference
+	,	ref int block_size					//already defined block_size, as reference
+	,	ref int c							//number of readed bytes, as reference
+	,	ref bool isNextUlong				//is next value ulong or not? true/false
+	,	bool UseBigInteger 	= 	false		//use BigInteger or not? true/false
+	,	int dataLength 		= 	0			//Length of data
+	,	BigInteger de 		= 	null		//de - d or e. d (secret exponent) - if decrypt by priv (d, n), (by default); or e (pubic exponent) - if decrypt by pub (verify signature)
+	,	BigInteger n 		= 	null		//n - modulus
+	,	int current_block 	= 	0			//number of the current block
+	,	int max_blocks 		= 	0			//number of the max block to decrypt
+	,	ulong length__ 		= 	0			//length of last block
+	)
+	{
+		if(UseBigInteger == true){
+			//rewrite buffer, when this is a last block, and have no block_length size.
+			if (c != block_size)
+			{
+				byte[] buffer2 = new byte[c];
+				for (int i = 0; i < c; i++){
+					buffer2[i] = buffer[i];
+				}
+				buffer = buffer2;
+			}
+										
+			int rest = (int)( dataLength - ( current_block * block_size ) );
+			if		( rest <= 0 ){
+				//here is full ulong, in this block
+
+				//slice buffer on 8 bytes, and cut ulong-value
+				byte[] NewBuffer = new byte[buffer.Length-8];
+				Buffer.BlockCopy(buffer, 0, NewBuffer, 0, NewBuffer.Length);
+				buffer = NewBuffer;
+			}
+			else if	( rest < 8 ){
+				//here is the partial of ulong, in this block, and partial in the next block.
+
+				int PartOfLenHere = 8 - rest;	//number of bytes in this block
+
+				//slice buffer on PartOfLenHere bytes, and cut ulong-value
+				byte[] NewBuffer = new byte[buffer.Length-PartOfLenHere];
+					Buffer.BlockCopy(buffer, 0, NewBuffer, 0, NewBuffer.Length);
+					buffer = NewBuffer;
+					isNextUlong = true;
+			}
+			else if	( rest == 8 ){
+				return;
+			}
+		}
+
+		if(UseBigInteger == false){
+			decbuffer = rsa.Decrypt(buffer, false);
+		}
+		else{
+			int BufferLength = ( ( current_block == max_blocks-1 ) ? (int)length__ : ( block_size - SubtractBytes ) );		//length__ !
+			byte[] decryptedBuffer = new byte[ BufferLength ];
+			decbuffer = new byte[ BufferLength ];
+
+			decryptedBuffer = 	(
+									(new BigInteger	(buffer))
+									.modPow(de, n)
+								)
+								.getBytes()
+			;
+
+			Buffer.BlockCopy(decryptedBuffer, 0, decbuffer, (decbuffer.Length-decryptedBuffer.Length), decryptedBuffer.Length);
+		}
+		//after this all, decrypted value will contains in decbuffer by reference.
+	}
+
+	
+	//	This method will return encbuffer, as bytearray.
+	
+	public static	byte[]	DecryptFullBlockOrLastBlock(	//decrypt full block or last block inside the cycle.
+		ref RSACryptoServiceProvider rsa	//RSACryptoServiceProvider, with imported pubKey
+	,	ref byte[] buffer					//readed buffer from the source file
+	,	ref int block_size					//already defined block_size, as reference
+	,	ref int c							//number of readed bytes, as reference
+	,	ref bool isNextUlong				//is next value ulong or not? true/false
+	,	bool UseBigInteger	=	false		//use BigInteger or not? true/false
+	,	int dataLength		=	0			//Length of data
+	,	BigInteger de		=	null		//de - d or e. d (secret exponent) - if decrypt by priv (d, n), (by default); or e (pubic exponent) - if decrypt by pub (verify signature)
+	,	BigInteger n		=	null		//n - modulus
+	,	int current_block	=	0			//number of the current block
+	,	int max_blocks		=	0			//number of the max block to decrypt
+	,	ulong length__		=	0			//length of last block
+	)
+	{
+		byte[] decbuffer = new byte[0];		//define encbuffer, as a bytearray
+
+		//encrypt full block or last block inside the cycle.
+		DecryptFullBlockOrLastBlock(
+			ref rsa								//RSACryptoServiceProvider, with imported pubKey
+		,	ref buffer							//readed buffer from the source file
+		,	ref decbuffer						//already defined decbuffer, as reference
+		,	ref block_size						//already defined block_size, as reference
+		,	ref c								//number of readed bytes, as reference
+		,	ref isNextUlong						//is next value ulong or not? true/false
+		,	UseBigInteger						//use BigInteger or not? true/false
+		,	dataLength							//Length of data
+		,	de									//de - d or e. d (secret exponent) - if decrypt by priv (d, n), (by default); or e (pubic exponent) - if decrypt by pub (verify signature)
+		,	n									//n - modulus
+		,	current_block						//number of the current block
+		,	max_blocks							//number of the max block to decrypt
+		,	length__							//length of last block
+		);
+		return decbuffer;						//return decbuffer.
+	}
+		
+
+	//
+	//	Decrypt encrypted file, by priv.
+	//	(d, n) - privkey, where n have n_bitlength size, and n_bytelength.
+	//	encrypted file readed by blocks with n_bytelength,
+	//	this block will be decrypted, then result will writted to blocks with bytelength (n_bytelenght - 1).
+	//	Last 8 bytes of encrypted file, this is ulong value with bytelength of last block.
+	//	This value will be readed at beginning, and then this value need to skip, and slice the bytes of last block, then.
+	//
+	public static	void	DecryptFile(
+		string key				=	""			//privKey to decrypt by default, or pubKey of owners, to verify the signature, by encrypting the message by owner's privKey
+	,	string src				=	""
+	,	string dest				=	""
+	,	bool UseBigInteger		=	false
+	,	bool byPub				=	false
+	)
+	{
+		ulong length__ = 0;													//define this ulong as 0
+		
+		if(UseBigInteger == true)											//if BigInteger modPow used for decryption, then this was been encrypted with modPow.
+		{
+			//read 8 bytes with last block length from the end of file.
+			byte[] LastBlockLength = new byte[8];							//8 bytes
+			using (BinaryReader reader = new BinaryReader(new FileStream(src , FileMode.Open)))	//open file
+			{
+				reader.BaseStream.Seek( ( ( new System.IO.FileInfo( src ) ).Length - 8 ), SeekOrigin.Begin);	//and read from the end
+				reader.Read(LastBlockLength, 0, 8);																//8 bytes
+				reader.Close();																					//then close file
+				reader.Dispose();
+			}
+			BigInteger LastBlockLength_Bi = (new BigInteger	(LastBlockLength));									//convert LastBlockLength to BigInteger
+			length__ = Convert.ToUInt64(LastBlockLength_Bi.ToString());											//then convert this to ulong.
+		}
+		//else, ulong value with last block length, is not contains in the end of file, in last 8 bytes.
+		
+		//open src and dest files as FileStreams
+		System.IO.FileStream fin = System.IO.File.Open	(	src,	System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.Read);			//src
+		System.IO.FileStream fout = System.IO.File.Open	(	dest,	System.IO.FileMode.Create, System.IO.FileAccess.Write, System.IO.FileShare.Write);		//dest
+		
+		//and try to decrypt src
+		try
+		{
+		
+			LoadKeyFile(key, UseBigInteger);			//extract public key from "key"-file with xml.
+			int n_bitlength = 0;
+			if(UseBigInteger == false){
+				n_bitlength = rsa.KeySize;													//then, get n_bitlength of modulus from RSA-key.
+			}
+			else{
+				//n_bitlength = n_value.dataLength * 32;
+				n_bitlength = bitLength(n_value);
+			}
+
+			set_lengths(n_bitlength, UseBigInteger);
+
+			System.IO.FileInfo finfo = new System.IO.FileInfo(src);		//create FileInfo for encrypted-file, to get length of this.
+			int dataLength = (int)finfo.Length;								//get length of file.
+			
+			byte[] buffer = new byte[block_size];						//define buffer with length of block for reading encrypted file
+			byte[] decbuffer = new byte[block_length];		//define decbuffer with length of block for write decrypted file
+			
+			BigInteger de, n;
+			if(UseBigInteger == false)
+			{
+				de = (
+					(byPub == true)
+						?	new BigInteger	(pa_Pub.Exponent)
+						:	new BigInteger	(pa_Priv.D)
+				);				//extract secret exponent, and convert to BigInteger.
+				n = (
+					new BigInteger	(
+						(
+							(byPub == true)
+								? pa_Pub
+								: pa_Priv
+						).Modulus
+					)
+				);			//extract modulus and confert to BigInteger.
+			}
+			else{
+				de	=	( (byPub == true) ? e_value : d_value);
+				n	=	n_value;
+			}
+			
+			int max_blocks = (int)(finfo.Length / block_size);
+			int current_block = 0;
+			
+			int c = 0;
+			
+			bool	isNextUlong = false;
+			
+			while ((c = fin.Read(buffer, 0, block_size)) > 0)  //читать файл блоками по block_size
+			{
+				if(UseBigInteger == true && isNextUlong == true){
+					break;
+				}
+			
+				decbuffer = DecryptFullBlockOrLastBlock(
+					ref rsa
+				,	ref buffer
+				,	ref block_size
+				,	ref c
+				,	ref isNextUlong
+				,	UseBigInteger
+				,	dataLength
+				,	de
+				,	n
+				,	current_block
+				,	max_blocks
+				,	length__
+				);
+				
+				fout.Write(decbuffer, 0, decbuffer.Length); //write this later.
+				current_block += 1;
+			}
+			fin.Close();
+			fout.Close();
+		}
+		catch (ArgumentException e)// when (e.ParamName == "…")
+		{
+			fin.Close();
+			fout.Close();
+			Console.WriteLine(e.ParamName);
+		}
+		catch (Exception ex)
+		{
+			fin.Close();
+			fout.Close();
+			Console.WriteLine(ex);
+		}
+	}
+
+	//
+	//	Decrypt encrypted bytearray with cipher, by priv.
+	//	(d, n) - privkey, where n have n_bitlength size, and n_bytelength.
+	//	encrypted file readed by blocks with n_bytelength,
+	//	this block will be decrypted, then result will writted to blocks with bytelength (n_bytelenght - 1).
+	//	Last 8 bytes of encrypted file, this is ulong value with bytelength of last block.
+	//	This value will be readed at beginning, and then this value need to skip, and slice the bytes of last block, then.
+	//
+	private static	void	DecryptBytes(
+		string key						//file with priv or pub
+	,	ref byte[] src					//reference on src-bytes
+	,	ref byte[] dest					//reference on dest-bytes
+	,	bool UseBigInteger = false		//UseBigInteger or not? true/false
+	,	bool byPub = false
+	)
+	{
+		ulong length__ = 0;
+		if(UseBigInteger == true)
+		{
+			//read 8 bytes with last block length from the end of file.
+			byte[] LastBlockLength = new byte[8];
+
+			Buffer.BlockCopy(src, src.Length-8, LastBlockLength, 0, 8);
+
+			BigInteger LastBlockLength_Bi = (new BigInteger	(LastBlockLength));
+								
+			length__ = Convert.ToUInt64(LastBlockLength_Bi.ToString());
+		}
+
+		int dataLength = src.Length;								//get length of src.
+
+		MemoryStream fin 	=	new MemoryStream(src);
+		MemoryStream fout	=	new MemoryStream();
+                                
+		try
+		{
+			LoadKeyFile(key, UseBigInteger);			//extract public key from "key"-file with xml.
+
+			int n_bitlength = 0;
+			if(UseBigInteger == false){
+				n_bitlength = rsa.KeySize;													//then, get n_bitlength of modulus from RSA-key.
+			}
+			else{
+				//n_bitlength = n_value.dataLength * 32;
+				n_bitlength = bitLength(n_value);
+			}
+
+			set_lengths(n_bitlength, UseBigInteger);
+
+
+			byte[] buffer = new byte[block_size];
+			byte[] decbuffer = new byte[block_length];
+
+			BigInteger de, n;
+			if(UseBigInteger == false)
+			{
+				de = (
+					(byPub == true)
+						?	new BigInteger	(pa_Pub.Exponent)
+						:	new BigInteger	(pa_Priv.D)
+				);				//extract secret exponent, and convert to BigInteger.
+				n = (
+					new BigInteger	(
+						(
+							(byPub == true)
+								? pa_Pub
+								: pa_Priv
+						).Modulus
+					)
+				);			//extract modulus and confert to BigInteger.
+			}
+			else{
+				de	=	( (byPub == true) ? e_value : d_value);
+				n	=	n_value;
+			}
+								
+			int max_blocks = (int)(src.Length / block_size);
+			int current_block = 0;
+			
+			int c = 0;
+								
+			bool	isNextUlong = false;
+			while ((c = fin.Read(buffer, 0, block_size)) > 0)  //читать файл блоками по block_size
+			{
+
+//				Console.WriteLine("dec: buffer: "+BitConverter.ToString(buffer).Replace("-", string.Empty)+" "+buffer.Length);
+
+				decbuffer = DecryptFullBlockOrLastBlock(
+					ref rsa
+				,	ref buffer
+				,	ref block_size
+				,	ref c
+				,	ref isNextUlong
+				,	UseBigInteger
+				,	dataLength
+				,	de
+				,	n
+				,	current_block
+				,	max_blocks
+				,	length__
+				);
+
+				if(UseBigInteger == true && isNextUlong == true){
+					break;
+				}
+				
+				fout.Write(decbuffer, 0, decbuffer.Length); //write this later.
+				current_block += 1;
+
+//				Console.WriteLine("dec: decbuffer: "+BitConverter.ToString(decbuffer).Replace("-", string.Empty)+" "+decbuffer.Length);
+
+			}
+			fin.Close();
+			dest = fout.ToArray();
+			fout.Close();
+		}
+		catch (ArgumentException)// e)// when (e.ParamName == "…")
+		{
+			fin.Close();
+			dest = fout.ToArray();
+			fout.Close();
+			//Console.WriteLine(e + ", "+e.ParamName);
+		}
+		catch (Exception ex)
+		{
+			fin.Close();
+			dest = fout.ToArray();
+			fout.Close();
+			Console.WriteLine(ex);
+		}
+	}
+
+	//return "dest"-bytearray
+	public static	byte[]	DecryptBytes(
+		string key
+	,	byte[] src
+	,	bool UseBigInteger = false
+	,	bool byPub = false
+	)
+	{
+		byte[] dest = new byte[0];
+
+		try{
+			DecryptBytes(
+				key
+			,	ref src
+			,	ref dest
+			,	UseBigInteger
+			,	byPub
+			);
+		}
+		catch(Exception ex){
+			Console.WriteLine(ex);
+		}
+		return dest;
+	}
+	//--------------------END RSABigInteger.--------------------
+
 }
+
+public static class RsaExtensions
+{
+//
+//	The following extensions for RSACryptoServiceProvider, allow to encrypt data by priv, and decrypt by pub, without UseBigIngeter = true; 
+//
+//	RSACryptoServiceProvider.Encrypt()		can encrypt only by pub.
+//	RSACryptoServiceProvider.Decrypt()		can decrypt only by priv.
+//	encryption by priv, and decryption by pub - is not supported.
+//		rsa.Decrypt() can not find priv to decrypt, when trying to decrypt by pub.
+//	Encryption by priv, and decryption by pub - this is signing and verify RSA-operations.
+//	But, using RSACryptoServiceProvider's methods, this working with hash of data, not with data.
+//	Signing, and verify digital RSA signature, have the following scheme:
+//		s = m ^ d mod n;		-	(compute signature):	"encrypt" by priv "(d, n)" the message "m", into sinature "s"
+//		send (m, s)
+//		m_ = s ^ e mod n;		-	(extract message):		"decrypt" by pub (e, n) the signature s, into message m_
+//		compare m and m_		-	(verify signature):		"compare" an existing "m", and "m_".
+//		
+//	//Usage:
+//	//	BigInteger.LoadKeyFile("privateKeyXmlFile.txt");										//load privkey to (rsa, pa_Priv, pa_pub)-values, or BigIntegers.
+//	//	byte[] encryptByPriv = (BigInteger.rsa).EncryptByPrivateKey(sourceBytes);				//return bytes
+//	//	byte[] decryptByPub = (BigInteger.rsa).DecryptByPublicKey(encryptByPriv);				//return bytes
+//	//	Console.WriteLine("CompareBytes: "+BigInteger.CompareBytes(decryptByPub, sourceBytes));	//must to be true.
+//		
+//
+
+	//Usage: byte[] EncryptedBytes = (BigInteger.rsa).EncryptByPrivateKey(sourceBytes); //return EncryptedBytes
+	public static byte[] EncryptByPrivateKey(
+		this RSACryptoServiceProvider rsaWithPriv
+	,	byte[] data
+	,	string key = ""
+	)
+	{
+		if (data == null){
+			throw new ArgumentNullException("data");
+		}
+		if (
+				(
+						( key == "" )
+					&&	(rsaWithPriv.PublicOnly)
+				)
+				||
+				(
+						(key != "")
+					&&	(!key.Contains("<D>"))
+				)
+		){
+			throw new InvalidOperationException("Private key is not loaded");
+		}
+		byte[] encryptBytesByBigIntegerPriv = 	BigInteger.EncryptBytes(
+																		(
+																			(key != "")
+																			? key
+																			: rsaWithPriv.ToXmlString(true)
+																		),
+																		data, true, true
+												)
+		;
+		return encryptBytesByBigIntegerPriv;
+	}
+
+	//Usage: byte[] DecryptedBytes = (BigInteger.rsa).DecryptByPublicKey(sourceBytes); //return DecryptedBytes
+	public static byte[] DecryptByPublicKey(
+		this RSACryptoServiceProvider rsaWithPrivPub
+	,	byte[] cipherData
+	,	string key = ""
+	)
+	{
+		if (cipherData == null){
+			throw new ArgumentNullException("cipherData");
+		}
+
+		byte[] decryptBytesByBigIntegerPub = new byte[0];
+		try{
+			decryptBytesByBigIntegerPub = BigInteger
+				.DecryptBytes
+				(
+					(
+						(key != "")
+							? key
+							:	rsaWithPrivPub.ToXmlString(true)	//rsa with priv
+					)
+				,	cipherData								//decrypt
+				,	true									//UseBigInteger
+				,	true									//byPub
+				)
+			;
+		}
+		catch(Exception ex){
+			Console.WriteLine(ex);
+		}
+		return decryptBytesByBigIntegerPub;
+	}
+}	//end extended RSA-methods to encrypt by priv, and decrypt by pub (sign and restore the message from signature, to verify this signature).
