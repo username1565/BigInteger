@@ -4185,6 +4185,51 @@ public class BigInteger
 			return;	//and return, then.
 	}
 
+
+	private static BigInteger CRTAcceleration(BigInteger value){
+//		Console.WriteLine("Start CRTAcceleration");
+		//		By definition of this method of accelleration, propose the following thing:
+		//			2 modPow with exp 512 bits, by modulus 512 bits + 1 adding + 1 mulmod,
+		//			all this is faster then 1 modPow with exponent 1024 bits, and faster in 2-3 times, for many values.
+		//		This accelleration working only for encrypt by privKey (signing the data), or decrypt by privKey (decrypt encrypted data), not by a pubKey.
+	
+		//		Description:
+		//		//	additional key values:
+		//		d_P = d mod (p-1);
+		//		d_Q = d mod (q-1);
+		//		InverseQ = q^(-1) mod (p) = q.modInv(p);
+		//		____________________________________________________________________________________________
+		//		//	where this is defined:
+		//		d_P			-	RSA_key.dp
+		//		d_Q			-	RSA_key.dq
+		//		InverseQ	-	RSA_key.InverseQ
+		//			This values, defined, after load key.
+		//		____________________________________________________________________________________________
+		//		Steps:
+		//		//faster decrypt (by priv), or sign-encrypt (when sign message by priv):
+		//		m_p = C^(d_P) mod p
+		//		m_q = C^(d_Q) mod q
+		//		h = (InverseQ * (m_p + ( ( m_p < m_q ) ? [q/p]*p : 0 ) - m_q)) mod p
+		//		m = (m_q + hq) mod (p*q) = (m_q + hq) mod n;
+		//			where, C - ciphertext (encrypted by pubKey, and which is try to decrypt by privKey), or message (which is try to be signed by privKey);
+		//			d_P, d_Q, InverseQ - additional key values; p, q - prime numbers as components of privKey; m - decrypted message, or signature. 
+
+		BigInteger m_p = value.modPow(dp_value, p_value);				//		m_p = C^(d_P) mod p
+		BigInteger m_q = value.modPow(dq_value, q_value);				//		m_q = C^(d_Q) mod q
+		//		h = (InverseQ * (m_p + ( ( m_p < m_q ) ? [q/p]*p : 0 ) - m_q)) mod p
+		BigInteger h = ( ( InverseQ_value * ( m_p + ( ( m_p < m_q ) ? ( ( ( ( q_value - ( q_value % p_value ) ) / p_value ) + 1 ) * p_value ) : 0 ) - m_q ) ) % p_value );
+		BigInteger result = ( ( m_q + ( h * q_value ) ) % n_value ) ;		//		m = (m_q + hq) mod (p*q);
+
+//		//Test 1:
+//			Console.WriteLine("( dp == d % (p - 1) ) ? "+(dp_value == d_value % (p_value - 1)));
+//			Console.WriteLine("( dq == d % (q - 1) ) ? "+(dq_value == d_value % (q_value - 1)));
+//			Console.WriteLine("( InverseQ ==  q.modInverse(p) ) ? "+(InverseQ_value == q_value.modInverse(p_value)));
+//		//Test 2:
+//			Console.WriteLine("test is CRTequal (result == value ^ d % n ) ? "+(result == value.modPow(d_value, n_value)));
+
+		return result;		//return BigInteger, with value from 0 up to (n-1);
+	}
+
 //
 //	Encrypt file [src], into file [dest], by using pubkey from file [key],
 //	or by using pubkey, which was been extracted from privkey in file [key].
@@ -4199,7 +4244,6 @@ public class BigInteger
 //
 //	Last block will be encrypted as is, but after encrypted block will be added ulong-value (8 bytes) with LastBlockLength.
 //
-
 
 	//
 	//	Encryption file or bytearray:
@@ -4241,6 +4285,7 @@ public class BigInteger
 	,	ref bool UseBigInteger				//use BigInteger or not? true/false
 	,	ref BigInteger ed					//(if UseBigInteger = true, then) ed - e or d. e (public exponent), if encrypt by pubkey (e, n); or d (secret exponent), if encrypt by privkey (d, n)
 	,	ref BigInteger n					//(if UseBigInteger = true, then) n - modulus
+	,	bool CRT=false						//use CRTAccelleration, or not? true(for priv only)/false
 	)
 	{
 //		Console.WriteLine("ed: "+ed.ToString());
@@ -4256,10 +4301,14 @@ public class BigInteger
 				//use BigInteger
 				byte[] encryptedBuffer;										//define new bytearray for encryptedBuffer (this can have a different bytelength)
 						encryptedBuffer = (									//and encrypt there
-							(new BigInteger	(buffer))						//the buffer
-							.modPow	(										//by using modPow method
-								ed,											//to encrypt this buffer, into BigInteger, by e or d
-								n											//and modulus n
+							( CRT == true && ( dp_value != 0 && dq_value != 0 && InverseQ_value != 0 ) )
+							? CRTAcceleration((new BigInteger	(buffer)))
+							:(
+								(new BigInteger	(buffer))						//the buffer
+								.modPow	(										//by using modPow method
+									ed,											//to encrypt this buffer, into BigInteger, by e or d
+									n											//and modulus n
+								)
 							)
 						)
 						.getBytes()											//and getBytes from this result-BigInteger.
@@ -4284,8 +4333,12 @@ public class BigInteger
 				//use BigInteger
 				byte[] encryptedBuffer;						//define new encrypted buffer for result, this can have different length
 					encryptedBuffer = (							//and encrypt
-						(new BigInteger	(buffer2))				//buffer2
-							.modPow	(ed, n)						//by using BigInteger modPow method
+						( CRT == true && ( dp_value != 0 && dq_value != 0 && InverseQ_value != 0 ) )
+						? CRTAcceleration((new BigInteger	(buffer2)))
+						:(
+							(new BigInteger	(buffer2))				//buffer2
+								.modPow	(ed, n)						//by using BigInteger modPow method
+						)
 					)
 					.getBytes()								//and get bytes from result BigInteger, then.
 				;
@@ -4318,6 +4371,7 @@ public class BigInteger
 	,	ref bool UseBigInteger				//encrypt with BigInteger modPow method - true, or with rsa.Encrypt() - false;
 	,	ref BigInteger ed
 	,	ref BigInteger n
+	,	bool CRT = false
 	)
 	{
 		byte[] encbuffer = new byte[block_size];	//define encbuffer, as a bytearray
@@ -4330,7 +4384,8 @@ public class BigInteger
 			ref c,
 			ref UseBigInteger,
 			ref ed,
-			ref n
+			ref n,
+			CRT
 		);
 
 		return encbuffer;					//return encbuffer.
@@ -4392,7 +4447,7 @@ public class BigInteger
 			while ((c = fin.Read(buffer, 0, block_length )) > 0)	//for each block of readed source file, including the last block
 			{
 				//encrypt by pub into the encbuffer, using rsa.Encrypt() or BigInteger.
-				encbuffer = EncryptFullBlockOrLastBlock(ref rsa, ref buffer, ref block_size, ref c, ref UseBigInteger, ref ed, ref n);
+				encbuffer = EncryptFullBlockOrLastBlock(ref rsa, ref buffer, ref block_size, ref c, ref UseBigInteger, ref ed, ref n, byPriv);
 				fout.Write(encbuffer, 0, encbuffer.Length);			//and write encbuffer into the destination file.
 			}
 			fin.Close();	//after all, close input file
@@ -4462,7 +4517,7 @@ public class BigInteger
 			{
 				Console.WriteLine("enc: buffer: "+BitConverter.ToString(buffer).Replace("-", string.Empty)+" "+buffer.Length);
 				//encrypt by pub or priv into the encbuffer, using rsa.Encrypt() or BigInteger.
-				encbuffer = EncryptFullBlockOrLastBlock(ref rsa, ref buffer, ref block_size, ref c, ref UseBigInteger, ref ed, ref n);
+				encbuffer = EncryptFullBlockOrLastBlock(ref rsa, ref buffer, ref block_size, ref c, ref UseBigInteger, ref ed, ref n, byPriv);
 				fout.Write(encbuffer, 0, encbuffer.Length);			//and write encbuffer into the destination file.
 				Console.WriteLine("enc: encbuffer: "+BitConverter.ToString(encbuffer).Replace("-", string.Empty)+" "+encbuffer.Length);
 				buffer = new byte[ block_length ];
@@ -4548,6 +4603,7 @@ public class BigInteger
 	,	int current_block 	= 	0			//number of the current block
 	,	int max_blocks 		= 	0			//number of the max block to decrypt
 	,	ulong length__ 		= 	0			//length of last block
+	,	bool CRT			=	false
 	)
 	{
 		if(UseBigInteger == true){
@@ -4591,16 +4647,20 @@ public class BigInteger
 		}
 		else{
 			int BufferLength = ( ( current_block == max_blocks-1 ) ? (int)length__ : ( block_size - SubtractBytes ) );		//length__ !
+			
 			byte[] decryptedBuffer = new byte[ BufferLength ];
 			decbuffer = new byte[ BufferLength ];
 
 			decryptedBuffer = 	(
-									(new BigInteger	(buffer))
-									.modPow(de, n)
+									( CRT == true && ( dp_value != 0 && dq_value != 0 && InverseQ_value != 0 ) )
+									? CRTAcceleration((new BigInteger	(buffer)))
+									: (
+										(new BigInteger	(buffer))
+										.modPow(de, n)
+									)
 								)
 								.getBytes()
 			;
-
 			Buffer.BlockCopy(decryptedBuffer, 0, decbuffer, (decbuffer.Length-decryptedBuffer.Length), decryptedBuffer.Length);
 		}
 		//after this all, decrypted value will contains in decbuffer by reference.
@@ -4622,6 +4682,7 @@ public class BigInteger
 	,	int current_block	=	0			//number of the current block
 	,	int max_blocks		=	0			//number of the max block to decrypt
 	,	ulong length__		=	0			//length of last block
+	,	bool CRT			=	false
 	)
 	{
 		byte[] decbuffer = new byte[0];		//define encbuffer, as a bytearray
@@ -4641,6 +4702,7 @@ public class BigInteger
 		,	current_block						//number of the current block
 		,	max_blocks							//number of the max block to decrypt
 		,	length__							//length of last block
+		,	CRT
 		);
 		return decbuffer;						//return decbuffer.
 	}
@@ -4687,7 +4749,7 @@ public class BigInteger
 		//and try to decrypt src
 		try
 		{
-		
+
 			LoadKeyFile(key, UseBigInteger);			//extract public key from "key"-file with xml.
 			int n_bitlength = 0;
 			if(UseBigInteger == false){
@@ -4755,6 +4817,7 @@ public class BigInteger
 				,	current_block
 				,	max_blocks
 				,	length__
+				,	!byPub
 				);
 				
 				fout.Write(decbuffer, 0, decbuffer.Length); //write this later.
@@ -4877,6 +4940,7 @@ public class BigInteger
 				,	current_block
 				,	max_blocks
 				,	length__
+				,	!byPub
 				);
 
 				if(UseBigInteger == true && isNextUlong == true){
