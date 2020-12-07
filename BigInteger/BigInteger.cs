@@ -30,7 +30,7 @@ public class BigInteger
 //		Random rnd2 = new Random();
 //		Byte[] randbigint = new Byte[maxLength];	//with large values of "maxLength" BigInteger working slower...
 //		rnd.NextBytes(randbigint);
-//		Console.WriteLine("test_large_BigInteger "+(new BigInteger(randbigint)).ToString());
+//		log("test_large_BigInteger "+(new BigInteger(randbigint)).ToString());
 
     // primes smaller than 2000 to test the generated prime number
     public static readonly int[] primesBelow2000 = {
@@ -2526,7 +2526,7 @@ public class BigInteger
             big = (big - 2);
             isprime = big.isProbablePrime(confidence);
         }
-//		Console.WriteLine("return prevprime: "+big);
+//		log("return prevprime: "+big);
         return big;
     }
 
@@ -3684,6 +3684,14 @@ public class BigInteger
 //		optionally, there is possible to Encrypt
 
 	
+	public static bool enableLog = true;
+	
+	public static void log(string str){
+		if(enableLog==true){
+			File.AppendAllText("debug.log", str+"\n");	//add string to debug.log
+		}
+	}
+
 	//	extended methods
 	public static	string		Bi2Base64	( BigInteger bi )								//BigInteger -> to Base64-string.
 	{
@@ -3704,17 +3712,17 @@ public class BigInteger
 		return bytes;
 	}
 
-	public static	bool		CompareFiles(string first_path="", string second_path="")	//Compare two files (filepaths).
+	public static	bool		CompareFiles(string first_path="", string second_path="", bool UpToEnd = false)	//Compare two files (filepaths).
 	{
 		System.IO.FileInfo first = new System.IO.FileInfo( first_path );
 		System.IO.FileInfo second = new System.IO.FileInfo( second_path );
 				
 		if (first.Length != second.Length){
-			Console.WriteLine("Files lengths of files not equal! first.Length: "+first.Length+" != second.Length: "+second.Length);
+			log("Files lengths of files not equal! first.Length: "+first.Length+" != second.Length: "+second.Length);
 			return false;
 		}
 		if (string.Equals(first.FullName, second.FullName, StringComparison.OrdinalIgnoreCase)){
-			Console.WriteLine("Same file, fullNames are equal! first.FullName: "+first.FullName+", second.FullName: "+second.FullName);
+			log("Same file, fullNames are equal! first.FullName: "+first.FullName+", second.FullName: "+second.FullName);
 			return true;
 		}
 
@@ -3722,19 +3730,25 @@ public class BigInteger
 		using (FileStream fs1 = first.OpenRead()){
 			using (FileStream fs2 = second.OpenRead())
 			{
+				bool NotEqual = false;
 				for (int i = 0; i < first.Length; i++)			//for each byte, up to first.length
 				{
 					int first_ith_byte = fs1.ReadByte();		//read byte from first file to int
 					int second_ith_byte = fs2.ReadByte();		//read byte from second file to int
 					if ( first_ith_byte != second_ith_byte){	//if not equal
-						Console.WriteLine(
+						log(
 							"Byte i: "+i+
 							" not equal! "+first_ith_byte+		
 							"(1) !== "+second_ith_byte+"(2)"
 						);
-						return false;							//and return false
+						if(UpToEnd==true){
+							NotEqual = true;
+						}else{
+							return false;							//and return false
+						}
 					}
 				}
+				if(NotEqual == true){return false;}
 			}
 		}
 		return true;											//else, if all bytea are equal - return true.
@@ -3747,9 +3761,9 @@ public class BigInteger
 	
 	public static	void		WriteAnotherFileIfExists(string filename, string data){		//Try to save "data" in "filename", or add timestamp to "filename", if "filename" already exists.
 		if (System.IO.File.Exists(filename)){
-			Console.WriteLine("File with filename "+filename+" is already exists!");
+			log("File with filename "+filename+" is already exists!");
 			filename = DateTime.Now.ToFileTime()+filename;
-			Console.WriteLine("Generate new filename: "+filename);
+			log("Generate new filename: "+filename);
 		}
 		System.IO.StreamWriter writter = System.IO.File.CreateText(filename);
 		writter.Write(data);
@@ -3859,17 +3873,17 @@ public class BigInteger
 	,	int bitlength = 512					//bitlength can be specified, default value = 512, just for test (this is faster)
 	)
 	{
-//		Console.WriteLine("GenerateRSAKeys - bitlength: "+bitlength);
+//		log("GenerateRSAKeys - bitlength: "+bitlength);
 		//start generate RSA-keys
 		if(UseBigInteger == false){									//if no need to use BigInteger
 			try{														//try
-//				Console.WriteLine("GenerateRSAKeys - UseBigInteger === false");
+//				log("GenerateRSAKeys - UseBigInteger === false");
 				rsa = new RSACryptoServiceProvider(bitlength);				//Generate new RSA key with specified bitlength, or default
 				//and save this into rsa, pa_Priv, pa_Pub.
 				pa_Priv	=	rsa.ExportParameters(true);						//export parameters of privkey
 				pa_Pub	=	rsa.ExportParameters(false);					//export parameters of pubkey
 			}catch (Exception ex){										//if exception
-				Console.WriteLine( "Error:" + ex);							//show this
+				log( "Error:" + ex.ToString());							//show this
 			}
 		}
 		else if (UseBigInteger == true){							//if need to use BigInteger	
@@ -3965,9 +3979,9 @@ public class BigInteger
 				}
 				catch //(Exception ex)		//on error
 				{
-				//	Console.WriteLine( "Error on saving Keys as rsa, pa_Priv, pa_Pub:" + ex);	//show this
+				//	log( "Error on saving Keys as rsa, pa_Priv, pa_Pub:" + ex);	//show this
 
-				//	Console.WriteLine( "Save keys as BigInteger-values...");
+				//	log( "Save keys as BigInteger-values...");
 					try{																		//and try to save generated key-values, as BigIntegers.
 						//save pub (e,n) and priv (d, n);
 						e_value = bi_e;
@@ -3985,20 +3999,20 @@ public class BigInteger
 						rsa					=	new RSACryptoServiceProvider();					//define new RSACryptoServiceProvider
 						pa_Priv				=	new RSAParameters();							//define new RSAParameters pa_Priv.
 						pa_Pub				=	new RSAParameters();							//define new RSAParameters pa_Pub.
-				//		Console.WriteLine( "Done.");
+				//		log( "Done.");
 					}
-					catch	(Exception exception){												//on error
-						Console.WriteLine( "Error:" + exception);								//show this
+					catch	(Exception ex){												//on error
+						log( "Error:" + ex.ToString());								//show this
 					}
 				}
 			}
 			catch	(Exception ex)																//if some error
 			{
-				Console.WriteLine( "Error:" + ex);												//show this
+				log( "Error:" + ex.ToString());												//show this
 			}
 		}
 		
-		Console.WriteLine("GenerateRSAKeys. SaveXMLKeys(UseBigInteger), UseBigInteger: "+UseBigInteger);
+//		log("GenerateRSAKeys. SaveXMLKeys(UseBigInteger), UseBigInteger: "+UseBigInteger);
 		SaveXMLKeys(UseBigInteger);
 	}
 	
@@ -4023,7 +4037,7 @@ public class BigInteger
 		}
 		catch (Exception ex)			//on error
 		{
-			Console.WriteLine(ex);		//show this.
+			log("ex: "+ex.ToString());		//show this.
 		}
 	}
 	
@@ -4095,7 +4109,7 @@ public class BigInteger
 				d_value			=	new BigInteger();										//	values
 			}
 		}
-//		Console.WriteLine("LoadKeyFile. KeyFile"+KeyFile+", SaveXMLKeys(UseBigInteger), UseBigInteger: "+UseBigInteger);
+//		log("LoadKeyFile. KeyFile"+KeyFile+", SaveXMLKeys(UseBigInteger), UseBigInteger: "+UseBigInteger);
 		SaveXMLKeys(UseBigInteger);
 		//After all, key from keyFile, or from xmlString, is loaded into (rsa, pa_Priv, pa_Pub)-values, or into BigIntegers.
 	}
@@ -4125,15 +4139,15 @@ public class BigInteger
 	public static int SubtractBytes, block_size, block_length;	//define this variables.
 	
 	public static int bitLength(BigInteger value){
-//		Console.WriteLine("bitLength - value:"+value.ToString());
+//		log("bitLength - value:"+value.ToString());
 		int bitLength = 0;
 		do
 		{
 			bitLength++;
 			value /= 2;
 		} while(value != 0);
-//		Console.WriteLine("bitLength - bitLength:"+bitLength);
-//		Console.WriteLine("bitLength - value.byteLength:"+value.getBytes().Length);
+//		log("bitLength - bitLength:"+bitLength);
+//		log("bitLength - value.byteLength:"+value.getBytes().Length);
 		return bitLength;
 	}
 	
@@ -4142,7 +4156,7 @@ public class BigInteger
 	,	bool UseBigInteger = false		//Use BigInteger to encrypt-decrypt-data or not? true/false
 	)
 	{
-//			Console.WriteLine("set_lengths - n_bitlength: "+n_bitlength);
+//			log("set_lengths - n_bitlength: "+n_bitlength);
 			//
 			//	For rsa.Encrypt() and rsa.Decrypt():
 			//		Having looked at some of the information on RSA encryption modes,
@@ -4187,7 +4201,7 @@ public class BigInteger
 
 
 	private static BigInteger CRTAcceleration(BigInteger value){
-//		Console.WriteLine("Start CRTAcceleration");
+//		log("Start CRTAcceleration");
 		//		By definition of this method of accelleration, propose the following thing:
 		//			2 modPow with exp 512 bits, by modulus 512 bits + 1 adding + 1 mulmod,
 		//			all this is faster then 1 modPow with exponent 1024 bits, and faster in 2-3 times, for many values.
@@ -4221,11 +4235,11 @@ public class BigInteger
 		BigInteger result = ( ( m_q + ( h * q_value ) ) % n_value ) ;		//		m = (m_q + hq) mod (p*q);
 
 //		//Test 1:
-//			Console.WriteLine("( dp == d % (p - 1) ) ? "+(dp_value == d_value % (p_value - 1)));
-//			Console.WriteLine("( dq == d % (q - 1) ) ? "+(dq_value == d_value % (q_value - 1)));
-//			Console.WriteLine("( InverseQ ==  q.modInverse(p) ) ? "+(InverseQ_value == q_value.modInverse(p_value)));
+//			log("( dp == d % (p - 1) ) ? "+(dp_value == d_value % (p_value - 1)));
+//			log("( dq == d % (q - 1) ) ? "+(dq_value == d_value % (q_value - 1)));
+//			log("( InverseQ ==  q.modInverse(p) ) ? "+(InverseQ_value == q_value.modInverse(p_value)));
 //		//Test 2:
-//			Console.WriteLine("test is CRTequal (result == value ^ d % n ) ? "+(result == value.modPow(d_value, n_value)));
+//			log("test is CRTequal (result == value ^ d % n ) ? "+(result == value.modPow(d_value, n_value)));
 
 		return result;		//return BigInteger, with value from 0 up to (n-1);
 	}
@@ -4288,19 +4302,20 @@ public class BigInteger
 	,	bool CRT=false						//use CRTAccelleration, or not? true(for priv only)/false
 	)
 	{
-//		Console.WriteLine("ed: "+ed.ToString());
-//		Console.WriteLine("n: "+n.ToString());
+//		log("ed: "+ed.ToString());
+//		log("n: "+n.ToString());
 		encbuffer = new byte[block_size];	//create new encbuffer with block_size.
 		if (c == buffer.Length)				//if this was been readed a full block, and not a last block - just encrypt it.
 		{
 			if(UseBigInteger == false){									//if no need to use BigInteger modPow to encrypt
 				encbuffer = rsa.Encrypt(buffer, false);						//just encrypt by using rsa.Encrypt()
 			}else{														//else
-//				Console.WriteLine("(new BigInteger	(buffer))"+(new BigInteger	(buffer)));
+//				log("(new BigInteger	(buffer))"+(new BigInteger	(buffer)));
 			
+//			log("EncryptFullBlockOrLastBlock in: "+(new BigInteger	(buffer)).ToString());
+
 				//use BigInteger
-				byte[] encryptedBuffer;										//define new bytearray for encryptedBuffer (this can have a different bytelength)
-						encryptedBuffer = (									//and encrypt there
+				BigInteger		bi_encryptedBuffer = (									//and encrypt there
 							( CRT == true && ( dp_value != 0 && dq_value != 0 && InverseQ_value != 0 ) )
 							? CRTAcceleration((new BigInteger	(buffer)))
 							:(
@@ -4311,9 +4326,12 @@ public class BigInteger
 								)
 							)
 						)
-						.getBytes()											//and getBytes from this result-BigInteger.
 				;
-//				Console.WriteLine("(new BigInteger	(encryptedBuffer))"+(new BigInteger	(encryptedBuffer)));
+//			log("EncryptFullBlockOrLastBlock out: "+(new BigInteger	(bi_encryptedBuffer)).ToString());
+				
+				byte[] encryptedBuffer = bi_encryptedBuffer.getBytes();										//define new bytearray for encryptedBuffer (this can have a different bytelength)
+				
+//				log("(new BigInteger	(encryptedBuffer))"+(new BigInteger	(encryptedBuffer)));
 				//independent of bytelength of result bytearray, write this in the encbuffer
 				Buffer.BlockCopy(encryptedBuffer, 0, encbuffer, (encbuffer.Length-encryptedBuffer.Length), encryptedBuffer.Length);
 			}
@@ -4329,7 +4347,7 @@ public class BigInteger
 			if(UseBigInteger == false){						//if no need to use BigInteger to encrypt
 				encbuffer = rsa.Encrypt(buffer2, false);		//just use rsa.Encrypt()
 			}else{											//else
-//				Console.WriteLine("(new BigInteger	(buffer2))"+(new BigInteger	(buffer2)));
+//				log("(new BigInteger	(buffer2))"+(new BigInteger	(buffer2)));
 				//use BigInteger
 				byte[] encryptedBuffer;						//define new encrypted buffer for result, this can have different length
 					encryptedBuffer = (							//and encrypt
@@ -4342,7 +4360,7 @@ public class BigInteger
 					)
 					.getBytes()								//and get bytes from result BigInteger, then.
 				;
-//				Console.WriteLine("(new BigInteger	(encryptedBuffer))"+(new BigInteger	(encryptedBuffer)));
+//				log("(new BigInteger	(encryptedBuffer))"+(new BigInteger	(encryptedBuffer)));
 				
 				//after this, write bytes of result BigInteger with cypher, into encbuffer, independent of bytelength of this result.
 				Buffer.BlockCopy(encryptedBuffer, 0, encbuffer, (encbuffer.Length-encryptedBuffer.Length), encryptedBuffer.Length);
@@ -4392,14 +4410,14 @@ public class BigInteger
 	}
 
 	public static	void	EncryptFile(	//Encrypt src-file to dest-file by pubKey or privKey
-		string key=""						//key for encrypt - the file/xml-string pub, or with xml-priv, to get pub from it, if byPriv == false, else with priv.
+		string key = ""						//key for encrypt - the file/xml-string pub, or with xml-priv, to get pub from it, if byPriv == false, else with priv.
 	,	string src = ""						//src - input file to encrypt
 	,	string dest = ""					//dest - output file save encryted ciphertext
 	,	bool UseBigInteger = false			//true - use, false - use rsa.Encrypt() and rsa.Decrypt()
 	,	bool byPriv = false					//default encryption, by publicKey - false, else - true, and encrypt by priv, to decrypt by pub (sign the message, to verify result cipher as signature).
 	)
 	{
-		LoadKeyFile(key);			//extract public key from "key"-file with xml.
+		LoadKeyFile(key, UseBigInteger);	//extract public key from "key"-file with xml.
 
 		int n_bitlength = 0;
 
@@ -4449,6 +4467,7 @@ public class BigInteger
 				//encrypt by pub into the encbuffer, using rsa.Encrypt() or BigInteger.
 				encbuffer = EncryptFullBlockOrLastBlock(ref rsa, ref buffer, ref block_size, ref c, ref UseBigInteger, ref ed, ref n, byPriv);
 				fout.Write(encbuffer, 0, encbuffer.Length);			//and write encbuffer into the destination file.
+				buffer = new byte[ block_length ];
 			}
 			fin.Close();	//after all, close input file
 			fout.Close();	//and close output file
@@ -4457,7 +4476,7 @@ public class BigInteger
 		{
 			fin.Close();
 			fout.Close();
-			Console.WriteLine( "\nError:" + ex);
+			log( "\nError:" + ex.ToString());
 		}
 	}
 
@@ -4515,11 +4534,11 @@ public class BigInteger
 
 			while ((c = fin.Read(buffer, 0, block_length )) > 0)
 			{
-				Console.WriteLine("enc: buffer: "+BitConverter.ToString(buffer).Replace("-", string.Empty)+" "+buffer.Length);
+//				log("enc: buffer: "+BitConverter.ToString(buffer).Replace("-", string.Empty)+" "+buffer.Length);
 				//encrypt by pub or priv into the encbuffer, using rsa.Encrypt() or BigInteger.
 				encbuffer = EncryptFullBlockOrLastBlock(ref rsa, ref buffer, ref block_size, ref c, ref UseBigInteger, ref ed, ref n, byPriv);
 				fout.Write(encbuffer, 0, encbuffer.Length);			//and write encbuffer into the destination file.
-				Console.WriteLine("enc: encbuffer: "+BitConverter.ToString(encbuffer).Replace("-", string.Empty)+" "+encbuffer.Length);
+//				log("enc: encbuffer: "+BitConverter.ToString(encbuffer).Replace("-", string.Empty)+" "+encbuffer.Length);
 				buffer = new byte[ block_length ];
 			}
 			fin.Close();
@@ -4531,7 +4550,7 @@ public class BigInteger
 			fin.Close();
 			dest = fout.ToArray();
 			fout.Close();
-			Console.WriteLine( "\nError:" + ex);
+			log( "\nError:" + ex.ToString());
 		}
 	}
 		
@@ -4650,8 +4669,11 @@ public class BigInteger
 			
 			byte[] decryptedBuffer = new byte[ BufferLength ];
 			decbuffer = new byte[ BufferLength ];
-
-			decryptedBuffer = 	(
+			
+//			log("DecryptFullBlockOrLastBlock de: "+de.ToString()+"n: "+n.ToString());
+//			log("DecryptFullBlockOrLastBlock in: "+(new BigInteger	(buffer)).ToString());
+			
+			BigInteger bi_decryptedBuffer = 	(
 									( CRT == true && ( dp_value != 0 && dq_value != 0 && InverseQ_value != 0 ) )
 									? CRTAcceleration((new BigInteger	(buffer)))
 									: (
@@ -4659,8 +4681,13 @@ public class BigInteger
 										.modPow(de, n)
 									)
 								)
-								.getBytes()
+								
 			;
+
+//			log("DecryptFullBlockOrLastBlock out: "+bi_decryptedBuffer.ToString());
+			
+			decryptedBuffer = bi_decryptedBuffer.getBytes();
+			
 			Buffer.BlockCopy(decryptedBuffer, 0, decbuffer, (decbuffer.Length-decryptedBuffer.Length), decryptedBuffer.Length);
 		}
 		//after this all, decrypted value will contains in decbuffer by reference.
@@ -4826,17 +4853,17 @@ public class BigInteger
 			fin.Close();
 			fout.Close();
 		}
-		catch (ArgumentException e)// when (e.ParamName == "…")
+		catch (ArgumentException ex)// when (e.ParamName == "…")
 		{
 			fin.Close();
 			fout.Close();
-			Console.WriteLine(e.ParamName);
+			log("ex.ParamName: "+ex.ParamName);
 		}
 		catch (Exception ex)
 		{
 			fin.Close();
 			fout.Close();
-			Console.WriteLine(ex);
+			log("ex: "+ex.ToString());
 		}
 	}
 
@@ -4925,7 +4952,7 @@ public class BigInteger
 			while ((c = fin.Read(buffer, 0, block_size)) > 0)  //читать файл блоками по block_size
 			{
 
-//				Console.WriteLine("dec: buffer: "+BitConverter.ToString(buffer).Replace("-", string.Empty)+" "+buffer.Length);
+//				log("dec: buffer: "+BitConverter.ToString(buffer).Replace("-", string.Empty)+" "+buffer.Length);
 
 				decbuffer = DecryptFullBlockOrLastBlock(
 					ref rsa
@@ -4950,7 +4977,7 @@ public class BigInteger
 				fout.Write(decbuffer, 0, decbuffer.Length); //write this later.
 				current_block += 1;
 
-//				Console.WriteLine("dec: decbuffer: "+BitConverter.ToString(decbuffer).Replace("-", string.Empty)+" "+decbuffer.Length);
+//				log("dec: decbuffer: "+BitConverter.ToString(decbuffer).Replace("-", string.Empty)+" "+decbuffer.Length);
 
 			}
 			fin.Close();
@@ -4962,14 +4989,14 @@ public class BigInteger
 			fin.Close();
 			dest = fout.ToArray();
 			fout.Close();
-			//Console.WriteLine(e + ", "+e.ParamName);
+			//log(e + ", "+e.ParamName);
 		}
 		catch (Exception ex)
 		{
 			fin.Close();
 			dest = fout.ToArray();
 			fout.Close();
-			Console.WriteLine(ex);
+			log("ex: "+ex.ToString());
 		}
 	}
 
@@ -4993,7 +5020,7 @@ public class BigInteger
 			);
 		}
 		catch(Exception ex){
-			Console.WriteLine(ex);
+			log("ex: "+ex.ToString());
 		}
 		return dest;
 	}
@@ -5022,7 +5049,7 @@ public static class RsaExtensions
 //	//	BigInteger.LoadKeyFile("privateKeyXmlFile.txt");										//load privkey to (rsa, pa_Priv, pa_pub)-values, or BigIntegers.
 //	//	byte[] encryptByPriv = (BigInteger.rsa).EncryptByPrivateKey(sourceBytes);				//return bytes
 //	//	byte[] decryptByPub = (BigInteger.rsa).DecryptByPublicKey(encryptByPriv);				//return bytes
-//	//	Console.WriteLine("CompareBytes: "+BigInteger.CompareBytes(decryptByPub, sourceBytes));	//must to be true.
+//	//	log("CompareBytes: "+BigInteger.CompareBytes(decryptByPub, sourceBytes));	//must to be true.
 //		
 //
 
@@ -5089,7 +5116,7 @@ public static class RsaExtensions
 			;
 		}
 		catch(Exception ex){
-			Console.WriteLine(ex);
+			Console.WriteLine("ex: "+ex.ToString());
 		}
 		return decryptBytesByBigIntegerPub;
 	}
